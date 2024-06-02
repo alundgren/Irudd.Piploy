@@ -9,6 +9,13 @@ You register a git repo + docker commands to run the service and this tool will 
 - Polling git
 - Git commit hook + minimal web server on the pi to receive the hook so we dont have to poll at all
 - Dashboard
+- Do we need: https://github.com/octokit/octokit.net ?
+
+
+## How a full workflow works
+
+Check that piploy status
+> ./piploy -status
 
 
 ## Build self contained
