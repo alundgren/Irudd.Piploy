@@ -14,20 +14,27 @@ internal class HostBuilder
 {
     public static IHost CreateServiceHost(string[] args) =>    
         CreateBuilderWithConfigOnly(args)
-            .ConfigureServices((hostContext, services) =>
-            {
-                services.AddHostedService<DeploymentBackgroundService>();
-            })
-            .ConfigureLogging(logging =>
-            {
-                logging.ClearProviders();
-                logging.AddConsole();
-            })
-            .Build();
+        .ConfigureServices((hostContext, services) =>
+        {
+            services.AddHostedService<DeploymentBackgroundService>();
+        })
+        .ConfigureLogging(logging =>
+        {
+            logging.ClearProviders();
+            logging.AddConsole();
+        })
+        .Build();
 
     public static IHost CreateConfigOnlyHost(string[] args) => CreateBuilderWithConfigOnly(args).Build();
 
     private static IHostBuilder CreateBuilderWithConfigOnly(string[] args) => Host
         .CreateDefaultBuilder(args)
-        .ConfigureAppConfiguration(x => x.AddJsonFile("piploy.json"));
+        .ConfigureAppConfiguration(x => x.AddJsonFile("piploy.json"))
+        .ConfigureServices((context, services) =>
+        {
+            services.AddOptions<PiploySettings>()
+                .BindConfiguration("Piploy")
+                .ValidateDataAnnotations()
+                .ValidateOnStart(); ;
+        });
 }

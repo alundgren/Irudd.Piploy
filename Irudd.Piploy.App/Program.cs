@@ -1,6 +1,6 @@
 ﻿using Irudd.Piploy.App;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using System.CommandLine;
 using System.CommandLine.Invocation;
 
@@ -9,10 +9,17 @@ using CancellationTokenSource tokenSource = new CancellationTokenSource();
 Task Status(InvocationContext context)
 {
     var host = HostBuilder.CreateConfigOnlyHost(args);
-    var config = host.Services.GetRequiredService<IConfiguration>();
-    Console.WriteLine(config["RootFolder"]);
-    Console.WriteLine("Ok");
-    Console.WriteLine(AppDomain.CurrentDomain.BaseDirectory);
+    var settings = host.Services.GetRequiredService<IOptions<PiploySettings>>().Value;
+
+    Console.WriteLine($"Host root: {settings.RootFolder}");
+
+    foreach(var application in settings.Applications)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Application: {application.GitRepositoryUrl}");
+        Console.WriteLine("Status: Ok");
+    }
+
     return Task.CompletedTask;
 }
 
