@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Irudd.Piploy.App", "Irudd.Piploy.App\Irudd.Piploy.App.csproj", "{EC787EA4-A1E0-4780-BC93-57DBEB740D2E}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Irudd.Piploy.Test", "Irudd.Piploy.Test\Irudd.Piploy.Test.csproj", "{82D22EF8-DCAD-4A93-83EF-325F3DF425FF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{694B317D-8905-464B-A660-5A1BA3B0A957}"
+	ProjectSection(SolutionItems) = preProject
+		README.md = README.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EC787EA4-A1E0-4780-BC93-57DBEB740D2E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EC787EA4-A1E0-4780-BC93-57DBEB740D2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EC787EA4-A1E0-4780-BC93-57DBEB740D2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EC787EA4-A1E0-4780-BC93-57DBEB740D2E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{82D22EF8-DCAD-4A93-83EF-325F3DF425FF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{82D22EF8-DCAD-4A93-83EF-325F3DF425FF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{82D22EF8-DCAD-4A93-83EF-325F3DF425FF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{82D22EF8-DCAD-4A93-83EF-325F3DF425FF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {BB798DFA-7274-4EAA-95EB-973B8C0C3D8E}
+	EndGlobalSection
+EndGlobal
