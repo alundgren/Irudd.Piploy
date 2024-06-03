@@ -10,7 +10,7 @@ You register a git repo + docker commands to run the service and this tool will 
 - Git commit hook + minimal web server on the pi to receive the hook so we dont have to poll at all
 - Dashboard
 - Do we need: https://github.com/octokit/octokit.net ?
-
+- TODO: Make sure the name property is only a-z 0-9 - _ so we are safe for filesystems
 
 ## How a full workflow works
 
