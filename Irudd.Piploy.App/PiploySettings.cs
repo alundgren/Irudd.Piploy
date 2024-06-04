@@ -6,7 +6,7 @@ namespace Irudd.Piploy.App;
 public class PiploySettings
 {
     [Required]
-    public string RootFolder { get; set; } = null!;
+    public string RootDirectory { get; set; } = null!;
 
     [Required]
     [ValidateEnumeratedItems]
@@ -20,6 +20,10 @@ public class PiploySettings
 
         [Required]
         public string GitRepositoryUrl { get; set; } = null!;
+
+        public string GetRootDirectory(PiploySettings settings) => Path.Combine(settings.RootDirectory, Name);
+
+        public string GetRepoDirectory(PiploySettings settings) => Path.Combine(GetRootDirectory(settings), "repo");
     }
 }
 
