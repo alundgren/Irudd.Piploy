@@ -81,12 +81,6 @@ async Task Test(InvocationContext context)
         else
         {
             //Clone the repo to applicationRoot
-            /*
-            To support username/password
-            var co = new CloneOptions();
-            co.FetchOptions.CredentialsProvider = (_url, _user, _cred) => new UsernamePasswordCredentials { Username = "Username", Password = "Password" };
-            Repository.Clone("https://github.com/libgit2/libgit2sharp.git", "path/to/repo", co);             
-             */
             Repository.Clone(application.GitRepositoryUrl, applicationRoot);
         }
     }

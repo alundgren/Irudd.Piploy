@@ -17,10 +17,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="FileSystem\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <None Update="piploy.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
