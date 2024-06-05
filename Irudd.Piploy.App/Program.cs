@@ -1,10 +1,8 @@
 ﻿using Irudd.Piploy.App;
-using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.CommandLine;
 using System.CommandLine.Invocation;
-using System.Diagnostics.Metrics;
 
 using CancellationTokenSource tokenSource = new CancellationTokenSource();
 
@@ -31,10 +29,11 @@ async Task Service(InvocationContext context)
     await host.StartAsync(tokenSource.Token);
 }
 
-Task Poll(InvocationContext context)
+async Task Poll(InvocationContext context)
 {
-    Console.WriteLine("Polling for changes");
-    return Task.CompletedTask;
+    var host = HostBuilder.CreateConfigOnlyHost(args);
+    var service = host.Services.GetRequiredService<PiployService>();
+    await service.EnsureLocalRepositoriesAsync();
 }
 
 async Task Test(InvocationContext context)
@@ -42,7 +41,6 @@ async Task Test(InvocationContext context)
     var host = HostBuilder.CreateConfigOnlyHost(args);
     var service = host.Services.GetRequiredService<PiployService>();
     await service.EnsureLocalRepositoriesAsync();
-    //Docs: https://github.com/libgit2/libgit2sharp/wiki/LibGit2Sharp-Hitchhiker%27s-Guide-to-Git
 }
 
 var rootCommand = new RootCommand("piploy raspberry pi + git + docker host");
