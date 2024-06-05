@@ -1,4 +1,6 @@
-﻿using Irudd.Piploy.App;
+﻿using Docker.DotNet;
+using Docker.DotNet.Models;
+using Irudd.Piploy.App;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using System.CommandLine;
@@ -38,9 +40,19 @@ async Task Poll(InvocationContext context)
 
 async Task Test(InvocationContext context)
 {
-    var host = HostBuilder.CreateConfigOnlyHost(args);
-    var service = host.Services.GetRequiredService<PiployService>();
-    await service.EnsureLocalRepositoriesAsync();
+    //https://github.com/dotnet/Docker.DotNet
+    DockerClient client = new DockerClientConfiguration()
+         .CreateClient();
+
+    IList<ContainerListResponse> containers = await client.Containers.ListContainersAsync(
+        new ContainersListParameters()
+        {
+            Limit = 10,
+        });
+    foreach(var container in containers)
+    {
+        Console.WriteLine(container.Command);
+    }
 }
 
 var rootCommand = new RootCommand("piploy raspberry pi + git + docker host");
