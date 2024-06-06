@@ -11,7 +11,7 @@ public class GitTests(ITestOutputHelper output) : TestBase(output)
         using var context = SetupTest();
         context.FakeRemote.CreateWithInitialFile();
 
-        await context.Service.EnsureLocalRepositoriesAsync();
+        await context.Git.EnsureLocalRepositoriesAsync();
 
         Assert.True(Directory.Exists(context.Settings.RootDirectory), "Root directory was not created");
     }
@@ -22,7 +22,7 @@ public class GitTests(ITestOutputHelper output) : TestBase(output)
         using var context = SetupTest();
         context.FakeRemote.CreateWithInitialFile();
 
-        await context.Service.EnsureLocalRepositoriesAsync();
+        await context.Git.EnsureLocalRepositoriesAsync();
 
         var expectedApplicationDirectory = Path.Combine(context.Settings.RootDirectory, context.Application.Name);
         Assert.True(Directory.Exists(expectedApplicationDirectory), "Application directory was not created");
@@ -34,7 +34,7 @@ public class GitTests(ITestOutputHelper output) : TestBase(output)
         using var context = SetupTest();
         context.FakeRemote.CreateWithInitialFile();
 
-        await context.Service.EnsureLocalRepositoriesAsync();
+        await context.Git.EnsureLocalRepositoriesAsync();
 
         var expectedClonedInitialFile = Path.Combine(context.Application.GetRepoDirectory(context.Settings), FakeGitRepository.InitialFilename);
         Assert.True(File.Exists(expectedClonedInitialFile), "Remote was not cloned to the repo directory");
@@ -45,10 +45,10 @@ public class GitTests(ITestOutputHelper output) : TestBase(output)
     {
         using var context = SetupTest();
         context.FakeRemote.CreateWithInitialFile();
-        await context.Service.EnsureLocalRepositoriesAsync();
+        await context.Git.EnsureLocalRepositoriesAsync();
         context.FakeRemote.AddSecondFile();
 
-        await context.Service.EnsureLocalRepositoriesAsync();
+        await context.Git.EnsureLocalRepositoriesAsync();
 
         var expectedClonedSecondFile = Path.Combine(context.Application.GetRepoDirectory(context.Settings), FakeGitRepository.SecondFilename);
         Assert.True(File.Exists(expectedClonedSecondFile), "Changes from the remote where not present locally after ensure");

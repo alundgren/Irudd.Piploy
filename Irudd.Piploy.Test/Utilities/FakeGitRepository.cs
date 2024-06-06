@@ -1,4 +1,5 @@
-﻿using LibGit2Sharp;
+﻿using Irudd.Piploy.App;
+using LibGit2Sharp;
 
 namespace Irudd.Piploy.Test.Utilities;
 
@@ -24,7 +25,7 @@ public class FakeGitRepository(string directory)
         AddFileAndCommit(repo, InitialFilename, "abc123");
     }
 
-    public (string App1Directory, string App2Directory) CreateWithDockerfiles()
+    public (string App1Directory, string App2Directory, GitCommit Commit) CreateWithDockerfiles()
     {
         CreateEmpty();
 
@@ -88,8 +89,8 @@ ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);
         var app1Directory = AddDockerDirectory("app1");
         var app2Directory = AddDockerDirectory("app2");
 
-        CommitChanges(repo, $"Added docker example");
-        return (app1Directory, app2Directory);
+        var commit = CommitChanges(repo, $"Added docker example");        
+        return (app1Directory, app2Directory, new GitCommit(commit.Sha));
     }
 
     public void AddSecondFile()

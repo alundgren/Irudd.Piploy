@@ -21,6 +21,18 @@ public class PiploySettings
         [Required]
         public string GitRepositoryUrl { get; set; } = null!;
 
+        /// <summary>
+        /// Relative path in the repo to the docker file.
+        //  Example if there is just a single dockerfile in the root:
+        //  "Dockerfile" or "/Dockerfile"
+        //  Example if there are two docker files in different directories
+        //  "/api/Dockerfile" "Ui/Dockerfile"
+        //  Example with custom name of the file
+        //  "api/DockerApiFile" or "/DockerApiFile"
+        /// </summary>
+        [Required]
+        public string DockerfilePath { get; set; } = null!;
+
         public string GetRootDirectory(PiploySettings settings) => Path.Combine(settings.RootDirectory, Name);
 
         public string GetRepoDirectory(PiploySettings settings) => Path.Combine(GetRootDirectory(settings), "repo");

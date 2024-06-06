@@ -8,12 +8,13 @@ public abstract class TestBase(ITestOutputHelper output)
 {
     protected ITestOutputHelper Output => output;
 
-    protected class TestContext(PiployGitService service, FakeGitRepository fakeRemote, PiploySettings settings,
+    protected class TestContext(FakeGitRepository fakeRemote, PiploySettings settings,
       ITestOutputHelper output,
       string tempTestDirectory,
       bool preserveTestDirectory) : IDisposable
     {
-        public PiployGitService Service => service;
+        public PiployGitService Git { get; } = new PiployGitService(Options.Create(settings));
+        public PiployDockerService Docker { get; } = new PiployDockerService(Options.Create(settings));
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 
@@ -37,23 +38,23 @@ public abstract class TestBase(ITestOutputHelper output)
     {
         var tempTestDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         var applicationRootDirectory = Path.Combine(tempTestDirectory, "root");
-        var remoteDirectory = Path.Combine(tempTestDirectory, "remote");
+        var remoteDirectory =  Path.Combine(tempTestDirectory, "remote");
         Directory.CreateDirectory(tempTestDirectory);
 
         var application = new PiploySettings.Application
         {
             GitRepositoryUrl = remoteDirectory,
-            Name = "testApplication"
+            Name = "testApplication",
+            DockerfilePath = "Dockerfile"
         };
         var settings = new PiploySettings
         {
             Applications = new List<PiploySettings.Application> { application },
-            RootDirectory = applicationRootDirectory
+            RootDirectory = applicationRootDirectory,            
         };
-        var service = new PiployGitService(Options.Create(settings));
 
         var remote = new FakeGitRepository(remoteDirectory);
 
-        return new TestContext(service, remote, settings, output, tempTestDirectory, preserveTestDirectory);
+        return new TestContext(remote, settings, output, tempTestDirectory, preserveTestDirectory);
     }
 }

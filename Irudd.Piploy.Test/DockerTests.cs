@@ -1,5 +1,6 @@
 using Docker.DotNet;
 using Docker.DotNet.Models;
+using Irudd.Piploy.App;
 using Irudd.Piploy.Test.Utilities;
 using Newtonsoft.Json;
 using System.Formats.Tar;
@@ -8,9 +9,24 @@ using Xunit.Abstractions;
 namespace Irudd.Piploy.Test;
 
 public class DockerTests(ITestOutputHelper output) : TestBase(output)
-{  
+{
     [Fact]
     public async Task BuildImage()
+    {
+        //TODO: How to reset docker state before tests or at least ensure we dont just blow it up with infinite test containers/images
+        using var context = SetupTest(preserveTestDirectory: true);
+        using var tokenSource = new CancellationTokenSource();
+        var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
+        await context.Git.EnsureLocalRepositoriesAsync();
+        context.Application.DockerfilePath = "app1/Dockerfile"; //TODO: Refactor the test setup and git logic so it's per app not with builtin loops
+
+        var (wasCreated, _) = await context.Docker.EnsureImageExists(context.Application, commit, cancellationToken: tokenSource.Token);
+
+        Assert.True(wasCreated);
+    }
+
+    [Fact]
+    public async Task BuildImagePoc()
     {
         /*
         //https://github.com/dotnet/Docker.DotNet
@@ -140,6 +156,26 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
 
         Output.WriteLine("State: " + (started ? "Ok" : "Not started"));
     }
+
+    [Theory]
+    [InlineData("Dockerfile", "", "Dockerfile")]
+    [InlineData("/Dockerfile", "", "Dockerfile")]
+    [InlineData(@"\Dockerfile", "", "Dockerfile")]
+    [InlineData(@"Api/Dockerfile", "Api", "Dockerfile")]
+    [InlineData(@"Api/Dockerfile.api", "Api", "Dockerfile.api")]
+    [InlineData(@"Dockerfile.api", "", "Dockerfile.api")]
+    [InlineData(@"/Dockerfile.api", "", "Dockerfile.api")]
+    [InlineData(@"a b/c d/file name", "a b/c d", "file name")]
+    [InlineData(@"/a b/c d/file name", "a b/c d", "file name")]
+    [InlineData(@"/a b/c d\file name", "a b/c d", "file name")]
+    public void DockerPathSetting(string setting, string expectedContextDirectory, string expectedDockerfilename)
+    {
+        var (contextDirectory, dockerFilename) = PiployDockerService.GetDockerfilePathFromSetting(setting);
+
+        Assert.Equal(expectedContextDirectory, contextDirectory);
+        Assert.Equal(expectedDockerfilename, dockerFilename);
+    }
+
 
     private class ProgressTracer(ITestOutputHelper output) : IProgress<JSONMessage>
     {
