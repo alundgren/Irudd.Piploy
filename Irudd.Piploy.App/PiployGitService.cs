@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 
 namespace Irudd.Piploy.App;
 
-public class PiployService(IOptions<PiploySettings> settings)
+public class PiployGitService(IOptions<PiploySettings> settings)
 {
     /*
      Git library documentation:

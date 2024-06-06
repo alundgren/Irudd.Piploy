@@ -34,7 +34,7 @@ async Task Service(InvocationContext context)
 async Task Poll(InvocationContext context)
 {
     var host = HostBuilder.CreateConfigOnlyHost(args);
-    var service = host.Services.GetRequiredService<PiployService>();
+    var service = host.Services.GetRequiredService<PiployGitService>();
     await service.EnsureLocalRepositoriesAsync();
 }
 

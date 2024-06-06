@@ -6,12 +6,14 @@ namespace Irudd.Piploy.Test.Utilities;
 
 public abstract class TestBase(ITestOutputHelper output)
 {
-    protected class TestContext(PiployService service, FakeGitRepository fakeRemote, PiploySettings settings,
+    protected ITestOutputHelper Output => output;
+
+    protected class TestContext(PiployGitService service, FakeGitRepository fakeRemote, PiploySettings settings,
       ITestOutputHelper output,
       string tempTestDirectory,
       bool preserveTestDirectory) : IDisposable
     {
-        public PiployService Service => service;
+        public PiployGitService Service => service;
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 
@@ -48,7 +50,7 @@ public abstract class TestBase(ITestOutputHelper output)
             Applications = new List<PiploySettings.Application> { application },
             RootDirectory = applicationRootDirectory
         };
-        var service = new PiployService(Options.Create(settings));
+        var service = new PiployGitService(Options.Create(settings));
 
         var remote = new FakeGitRepository(remoteDirectory);
 

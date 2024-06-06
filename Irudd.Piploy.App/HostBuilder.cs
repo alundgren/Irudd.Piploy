@@ -36,6 +36,6 @@ internal class HostBuilder
                 .BindConfiguration("Piploy")
                 .ValidateDataAnnotations()
                 .ValidateOnStart();
-            services.AddScoped<PiployService>();
+            services.AddScoped<PiployGitService>();
         });
 }
