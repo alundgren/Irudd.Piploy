@@ -11,10 +11,10 @@ namespace Irudd.Piploy.Test;
 public class DockerTests(ITestOutputHelper output) : TestBase(output)
 {
     [Fact]
-    public async Task BuildImage()
+    public async Task EnsureImage()
     {
         //TODO: How to reset docker state before tests or at least ensure we dont just blow it up with infinite test containers/images
-        using var context = SetupTest(preserveTestDirectory: true);
+        using var context = SetupTest(preserveTestDirectory: false);
         using var tokenSource = new CancellationTokenSource();
         var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
         await context.Git.EnsureLocalRepositoriesAsync();
@@ -23,6 +23,24 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
         var (wasCreated, _) = await context.Docker.EnsureImageExists(context.Application, commit, cancellationToken: tokenSource.Token);
 
         Assert.True(wasCreated);
+    }
+
+    [Fact]
+    public async Task EnsureRunningContainer()
+    {
+        using var context = SetupTest(preserveTestDirectory: false);
+        using var tokenSource = new CancellationTokenSource();
+        var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
+        await context.Git.EnsureLocalRepositoriesAsync();
+        context.Application.DockerfilePath = "app1/Dockerfile"; //TODO: Refactor the test setup and git logic so it's per app not with builtin loops
+        await context.Docker.EnsureImageExists(context.Application, commit, cancellationToken: tokenSource.Token);
+
+        var (wasCreated, wasStarted, containerId) = await context.Docker.EnsureContainerRunning(context.Application, commit, tokenSource.Token);
+
+        Output.WriteLine(containerId);
+
+        Assert.True(wasCreated);
+        Assert.True(wasStarted);
     }
 
     [Fact]
@@ -101,7 +119,7 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
     }
 
     [Fact]
-    public async Task CreateContainer()
+    public async Task CreateContainerPoc()
     {
         using var docker = new DockerClientConfiguration().CreateClient();
 

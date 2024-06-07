@@ -1,7 +1,11 @@
 ﻿using Docker.DotNet;
 using Docker.DotNet.Models;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
+using System.CommandLine.Parsing;
 using System.Formats.Tar;
+using System.Net.Sockets;
 
 namespace Irudd.Piploy.App;
 
@@ -22,12 +26,14 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
     {
         using var docker = new DockerClientConfiguration().CreateClient();
 
-        var versionTag = GetImageVersionTag(application.Name, commit.Value);
+        var versionTag = GetImageVersionTag(application.Name, commit);
 
-        var existingImage = await GetExistingImage(docker, versionTag, cancellationToken);
+        var existingImage = await GetExistingImageByVersion(docker, versionTag, cancellationToken);
 
         if (existingImage != null)
             return (false, existingImage.ID);
+
+        //TODO: Check if already correct version
 
         var (repoRelativeDockerContextDirectory, dockerfilename) = GetDockerfilePathFromSetting(application.DockerfilePath);
         var absoluteRepoDirectory = application.GetRepoDirectory(Settings);
@@ -60,7 +66,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         tarFile, Array.Empty<AuthConfig>(), new Dictionary<string, string>(),
         new ProgressTracer(), cancellationToken: cancellationToken);
 
-        existingImage = await GetExistingImage(docker, versionTag, cancellationToken);
+        existingImage = await GetExistingImageByVersion(docker, versionTag, cancellationToken);
 
         if (existingImage == null)
             throw new Exception($"Failed to create image for {application.Name}");
@@ -68,7 +74,51 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         return (true, existingImage.ID);
     }
 
-    private async Task<ImagesListResponse?> GetExistingImage(DockerClient docker, string versionTag, CancellationToken cancellationToken) =>
+    public async Task<(bool WasCreated, bool WasStarted, string ContainerId)> EnsureContainerRunning(PiploySettings.Application application, GitCommit commit, CancellationToken cancellationToken)
+    {
+        using var docker = new DockerClientConfiguration().CreateClient();
+
+        var containerName = $"{Piploy}_{application.Name}";
+
+        var existingContainer = await GetExistingContainerByName(docker, containerName, cancellationToken);
+
+        if(existingContainer != null)
+        {
+            //TODO: Check if already correct version and then just start it
+            await docker.Containers.StopContainerAsync(existingContainer.ID, new ContainerStopParameters
+            {
+                WaitBeforeKillSeconds = 5 //TODO: Configurable per app
+            }, cancellationToken);
+        }
+
+        var imageTag = GetImageVersionTag(application.Name, commit);
+
+        var createContainerParameters = new CreateContainerParameters
+        {
+            Image = imageTag,
+            Name = containerName,
+            HostConfig = new HostConfig
+            {
+                //TODO: Port bindings from settings
+                PortBindings = new Dictionary<string, IList<PortBinding>>
+                {
+                    { "80/tcp", new List<PortBinding> { new PortBinding { HostPort = "8084" } } }
+                },
+                AutoRemove = true
+            }
+        };
+
+        var response = await docker.Containers.CreateContainerAsync(createContainerParameters, cancellationToken: cancellationToken);
+        //TODO: Logg this Output.WriteLine(JsonConvert.SerializeObject(response));
+        if (response.ID == null)
+            throw new Exception($"Failed to create container for {application.Name}. Image used: {imageTag}.");
+
+        bool wasStarted = await docker.Containers.StartContainerAsync(response.ID, new ContainerStartParameters());
+
+        return (true, wasStarted, response.ID);
+    }
+
+    private async Task<ImagesListResponse?> GetExistingImageByVersion(DockerClient docker, string versionTag, CancellationToken cancellationToken) =>
         (await docker.Images.ListImagesAsync(new ImagesListParameters
         {
             Filters = new Dictionary<string, IDictionary<string, bool>>
@@ -77,8 +127,19 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
             }
         }, cancellationToken: cancellationToken)).FirstOrDefault();
 
+    private async Task<ContainerListResponse?> GetExistingContainerByName(DockerClient docker, string containerName, CancellationToken cancellationToken) =>
+        (await docker.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+                        {
+                            { "name", new Dictionary<string, bool> { { containerName, true } } }
+                        }
+        })).FirstOrDefault();
+
     //NOTE: Docker will throw if the reference is not all lowercase
     private string GetImageVersionTag(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
+
+    private string GetImageVersionTag(string appName, GitCommit commit) => GetImageVersionTag(appName, commit.Value);
 
     public static (string ContextDirectory, string Dockerfilename) GetDockerfilePathFromSetting(string dockerPathSetting)
     {
