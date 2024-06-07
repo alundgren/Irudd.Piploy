@@ -31,11 +31,12 @@ async Task Service(InvocationContext context)
     await host.StartAsync(tokenSource.Token);
 }
 
-async Task Poll(InvocationContext context)
+Task Poll(InvocationContext context)
 {
     var host = HostBuilder.CreateConfigOnlyHost(args);
     var service = host.Services.GetRequiredService<PiployGitService>();
-    await service.EnsureLocalRepositoriesAsync();
+    service.EnsureLocalRepositories();
+    return Task.CompletedTask;
 }
 
 async Task Test(InvocationContext context)

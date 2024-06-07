@@ -113,9 +113,18 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         if (response.ID == null)
             throw new Exception($"Failed to create container for {application.Name}. Image used: {imageTag}.");
 
-        bool wasStarted = await docker.Containers.StartContainerAsync(response.ID, new ContainerStartParameters());
+        try
+        {
+            bool wasStarted = await docker.Containers.StartContainerAsync(response.ID, new ContainerStartParameters());
 
-        return (true, wasStarted, response.ID);
+            return (true, wasStarted, response.ID);
+        }
+        catch(DockerApiException ex)
+        {
+            if (ex.Message.Contains("port is already allocated"))
+                throw new Exception("Port is already allocated"); //TODO: Can we figure out by what?
+            throw;
+        }
     }
 
     private async Task<ImagesListResponse?> GetExistingImageByVersion(DockerClient docker, string versionTag, CancellationToken cancellationToken) =>

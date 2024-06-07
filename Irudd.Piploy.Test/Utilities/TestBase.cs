@@ -18,7 +18,8 @@ public abstract class TestBase(ITestOutputHelper output)
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 
-        public PiploySettings.Application Application => settings.Applications.First();
+        public PiploySettings.Application App1Application => settings.Applications[0];
+        public PiploySettings.Application App2Application => settings.Applications[1];
 
         public void Dispose()
         {
@@ -41,15 +42,23 @@ public abstract class TestBase(ITestOutputHelper output)
         var remoteDirectory =  Path.Combine(tempTestDirectory, "remote");
         Directory.CreateDirectory(tempTestDirectory);
 
-        var application = new PiploySettings.Application
-        {
-            GitRepositoryUrl = remoteDirectory,
-            Name = "testApplication",
-            DockerfilePath = "Dockerfile"
-        };
         var settings = new PiploySettings
         {
-            Applications = new List<PiploySettings.Application> { application },
+            Applications = new List<PiploySettings.Application> 
+            {
+                new PiploySettings.Application
+                {
+                    GitRepositoryUrl = remoteDirectory,
+                    Name = "app1",
+                    DockerfilePath = "app1/Dockerfile"
+                },
+                new PiploySettings.Application
+                {
+                    GitRepositoryUrl = remoteDirectory,
+                    Name = "app2",
+                    DockerfilePath = "app2/Dockerfile"
+                }
+            },
             RootDirectory = applicationRootDirectory,            
         };
 

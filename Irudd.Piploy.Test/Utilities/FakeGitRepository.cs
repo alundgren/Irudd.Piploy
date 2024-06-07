@@ -7,22 +7,12 @@ public class FakeGitRepository(string directory)
 {
     //https://github.com/libgit2/libgit2sharp/wiki/LibGit2Sharp-Hitchhiker%27s-Guide-to-Git
 
-    public const string InitialFilename = "initial-file.txt";
-    public const string SecondFilename = "update-file.txt";
+    public const string IndexFilename = "index.html";
 
     public void CreateEmpty()
     {
         Directory.CreateDirectory(directory);
         Repository.Init(directory);
-    }
-
-    public void CreateWithInitialFile()
-    {
-        CreateEmpty();
-
-        using var repo = new Repository(directory);
-
-        AddFileAndCommit(repo, InitialFilename, "abc123");
     }
 
     public (string App1Directory, string App2Directory, GitCommit Commit) CreateWithDockerfiles()
@@ -66,22 +56,7 @@ ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);
     sub_filter 'request_id' '$request_id';
 }", overrideDirectory: fullDirectory);
 
-            AddAndStageTextFile(repo, "index.html", @"<!DOCTYPE html>
-<html>
-<head>
-<title>Hello World</title>
-</head>
-<body>
-<div>
-    <p><span>App</span> <span>{{AppName}}</span></p>
-    <p><span>Server&nbsp;address:</span> <span>server_address</span></p>
-    <p><span>Server&nbsp;name:</span> <span>server_hostname</span></p>
-    <p><span>Date:</span> <span>server_date</span></p>
-    <p><span>URI:</span> <span>server_url</span></p>
-    <p><span>Request ID:</span> <span>request_id</span></p>
-</div>
-</body>
-</html>".Replace("{{AppName}}", directoryName), overrideDirectory: fullDirectory);
+            AddAndStageTextFile(repo, IndexFilename, GetIndexHtmlContent(directoryName, "Initial"), overrideDirectory: fullDirectory);
 
             return fullDirectory;
         }
@@ -90,21 +65,20 @@ ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);
         var app2Directory = AddDockerDirectory("app2");
 
         var commit = CommitChanges(repo, $"Added docker example");        
-        return (app1Directory, app2Directory, new GitCommit(commit.Sha));
+        return (app1Directory, app2Directory, ToPiployCommit(commit));
     }
 
-    public void AddSecondFile()
+    public GitCommit UpdateIndexHtmlFile(string appName, string testTag = "Updated")
     {
         using var repo = new Repository(directory);
 
-        AddFileAndCommit(repo, SecondFilename, "xyz789");
+        var fullDirectory = Path.Combine(directory, appName);
+        AddAndStageTextFile(repo, IndexFilename, GetIndexHtmlContent(appName, testTag), overrideDirectory: fullDirectory);
+        var commit = CommitChanges(repo, $"Updated index.html for {appName}");
+        return ToPiployCommit(commit);
     }
 
-    private Commit AddFileAndCommit(Repository repo, string filename, string content)
-    {
-        AddAndStageTextFile(repo, filename, content);
-        return CommitChanges(repo, $"Added {filename}");
-    }
+    private GitCommit ToPiployCommit(Commit commit) => new GitCommit(commit.Sha);
 
     private Commit CommitChanges(Repository repo, string comment)
     {
@@ -120,4 +94,22 @@ ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);
         repo.Index.Add(fileRepoPath);
         repo.Index.Write();
     }
+
+
+    private static string GetIndexHtmlContent(string appName, string testTag) => @"<!DOCTYPE html>
+<html>
+<head>
+<title>Hello World</title>
+</head>
+<body>
+<div>
+    <p><span>App</span> <span>{{AppName}} - {{TestTag}}</span></p>
+    <p><span>Server&nbsp;address:</span> <span>server_address</span></p>
+    <p><span>Server&nbsp;name:</span> <span>server_hostname</span></p>
+    <p><span>Date:</span> <span>server_date</span></p>
+    <p><span>URI:</span> <span>server_url</span></p>
+    <p><span>Request ID:</span> <span>request_id</span></p>
+</div>
+</body>
+</html>".Replace("{{AppName}}", appName).Replace("{{TestTag}}", testTag);
 }

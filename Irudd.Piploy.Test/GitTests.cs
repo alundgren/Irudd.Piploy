@@ -3,54 +3,68 @@ using Xunit.Abstractions;
 
 namespace Irudd.Piploy.Test;
 
+/*
+ Fake remote structure:
+ app1/
+     index.html
+     Dockerfile
+     hello.conf
+ app2/
+     index.html
+     Dockerfile
+     hello.conf
+ */
 public class GitTests(ITestOutputHelper output) : TestBase(output)
 { 
     [Fact]
-    public async Task RootDirectoryNotCreated_WhenEnsureCalled_IsCreated()
+    public void RootDirectoryNotCreated_WhenEnsureCalled_IsCreated()
     {
         using var context = SetupTest();
-        context.FakeRemote.CreateWithInitialFile();
+        context.FakeRemote.CreateWithDockerfiles();
 
-        await context.Git.EnsureLocalRepositoriesAsync();
+        context.Git.EnsureLocalRepositories();
 
         Assert.True(Directory.Exists(context.Settings.RootDirectory), "Root directory was not created");
     }
 
     [Fact]
-    public async Task ApplicationDirectoryNotCreated_WhenEnsureCalled_IsCreated()
+    public void ApplicationDirectoryNotCreated_WhenEnsureCalled_IsCreated()
     {
         using var context = SetupTest();
-        context.FakeRemote.CreateWithInitialFile();
+        context.FakeRemote.CreateWithDockerfiles();
 
-        await context.Git.EnsureLocalRepositoriesAsync();
+        context.Git.EnsureLocalRepositories();
 
-        var expectedApplicationDirectory = Path.Combine(context.Settings.RootDirectory, context.Application.Name);
+        var expectedApplicationDirectory = Path.Combine(context.Settings.RootDirectory, context.App1Application.Name);
         Assert.True(Directory.Exists(expectedApplicationDirectory), "Application directory was not created");
     }
 
     [Fact]
-    public async Task ApplicationDirectoryEmpty_WhenEnsureCalled_RemoteIsCloned()
+    public void ApplicationDirectoryEmpty_WhenEnsureCalled_RemoteIsCloned()
     {
         using var context = SetupTest();
-        context.FakeRemote.CreateWithInitialFile();
+        context.FakeRemote.CreateWithDockerfiles();
+        var app = context.App1Application;
 
-        await context.Git.EnsureLocalRepositoriesAsync();
+        context.Git.EnsureLocalRepository(app);
 
-        var expectedClonedInitialFile = Path.Combine(context.Application.GetRepoDirectory(context.Settings), FakeGitRepository.InitialFilename);
+        var expectedClonedInitialFile = Path.Combine(app.GetRepoDirectory(context.Settings), $"{app.Name}/{FakeGitRepository.IndexFilename}");
         Assert.True(File.Exists(expectedClonedInitialFile), "Remote was not cloned to the repo directory");
     }
 
     [Fact]
-    public async Task RemoteHasChanges_WhenEnsureCalled_LocalIsMovedForward()
+    public void RemoteHasChanges_WhenEnsureCalled_LocalIsMovedForward()
     {
+        const string TestTag = "a6070008-cc23-453a-a93d-b28c4cc73e78";
         using var context = SetupTest();
-        context.FakeRemote.CreateWithInitialFile();
-        await context.Git.EnsureLocalRepositoriesAsync();
-        context.FakeRemote.AddSecondFile();
+        context.FakeRemote.CreateWithDockerfiles();
+        var app = context.App1Application;
+        context.Git.EnsureLocalRepository(app);
+        context.FakeRemote.UpdateIndexHtmlFile(app.Name, testTag: TestTag);
+        
+        context.Git.EnsureLocalRepository(app);
 
-        await context.Git.EnsureLocalRepositoriesAsync();
-
-        var expectedClonedSecondFile = Path.Combine(context.Application.GetRepoDirectory(context.Settings), FakeGitRepository.SecondFilename);
-        Assert.True(File.Exists(expectedClonedSecondFile), "Changes from the remote where not present locally after ensure");
+        var filePath = Path.Combine(app.GetRepoDirectory(context.Settings), $"{app.Name}/{FakeGitRepository.IndexFilename}");
+        Assert.Contains(TestTag, File.ReadAllText(filePath));
     }
 }
