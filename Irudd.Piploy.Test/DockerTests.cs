@@ -1,15 +1,21 @@
-using Docker.DotNet;
-using Docker.DotNet.Models;
 using Irudd.Piploy.App;
 using Irudd.Piploy.Test.Utilities;
-using Newtonsoft.Json;
-using System.Formats.Tar;
 using Xunit.Abstractions;
 
 namespace Irudd.Piploy.Test;
 
 public class DockerTests(ITestOutputHelper output) : TestBase(output)
 {
+    [Fact]
+    public async Task Foo()
+    {
+        using var context = SetupTest(preserveTestDirectory: false);
+        using var tokenSource = new CancellationTokenSource();
+        var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
+
+        await context.Docker.Cleanup(tokenSource.Token, alsoRemoveActive: false);
+    }
+
     [Fact]
     public async Task EnsureImage()
     {
@@ -43,8 +49,6 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
 
         var (wasCreated, wasStarted, containerId) = await context.Docker.EnsureContainerRunning(app1, commit, tokenSource.Token);
 
-        Output.WriteLine(containerId);
-
         Assert.True(wasCreated);
         Assert.True(wasStarted);
     }
@@ -66,14 +70,5 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
 
         Assert.Equal(expectedContextDirectory, contextDirectory);
         Assert.Equal(expectedDockerfilename, dockerFilename);
-    }
-
-
-    private class ProgressTracer(ITestOutputHelper output) : IProgress<JSONMessage>
-    {
-        public void Report(JSONMessage value)
-        {            
-            output.WriteLine(JsonConvert.SerializeObject(value));
-        }
     }
 }

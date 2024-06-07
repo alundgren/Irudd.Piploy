@@ -1,11 +1,8 @@
 ﻿using Docker.DotNet;
 using Docker.DotNet.Models;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json;
-using System.CommandLine.Parsing;
 using System.Formats.Tar;
-using System.Net.Sockets;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace Irudd.Piploy.App;
 
@@ -58,7 +55,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
             Labels = new Dictionary<string, string>
             {
                 [$"{Piploy}_buildDate"] = DateTimeOffset.UtcNow.ToString("u"),
-                [$"{Piploy}_appName"] = application.Name,
+                [ImageAppLabelName] = application.Name,
                 [$"{Piploy}_gitTipCommit"] = commit.Value
             },
             Dockerfile = dockerfilename //NOTE: This is just the name since the tarfile we send has the docker context directory as it's root
@@ -127,6 +124,57 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         }
     }
 
+    /// <summary>
+    /// Delete images and containers created by us.
+    /// By default only removes unused images and containers but
+    /// with alsoRemoveActive = true we remove everything.
+    /// 
+    /// NOTE: We lean on that all our containers are created with delete on stop
+    ///       hence why no deletes for containers.
+    /// </summary>
+    /// <param name="alsoRemoveActive"></param>
+    public async Task Cleanup(CancellationToken cancellationToken, bool alsoRemoveActive = false)
+    {
+        using var docker = new DockerClientConfiguration().CreateClient();
+
+        var allPiployImages = (await docker.Images.ListImagesAsync(new ImagesListParameters
+            {
+                All = true
+            }, cancellationToken: cancellationToken))
+            .Where(x => x.Labels.ContainsKey(ImageAppLabelName))
+        .ToList();
+
+        var allImageIds = allPiployImages.Select(x => x.ID).ToHashSet();
+
+        var allPiployContainers = (await docker.Containers.ListContainersAsync(new ContainersListParameters { All = true })).Where(x => allImageIds.Contains(x.ImageID)).ToList();
+
+        var latestApplicationTags = Settings.Applications.Select(x => GetImageVersionTag(x.Name, "latest")).ToHashSet();
+        bool HasLatestTag(ImagesListResponse image) => (image.RepoTags ?? new List<string>()).Intersect(latestApplicationTags).Any();
+
+        //Stop containers if needed
+        foreach (var container in allPiployContainers)
+        {
+            var containerImage = allPiployImages.Single(x => x.ID == container.ImageID);
+            var isKept = HasLatestTag(containerImage) && !alsoRemoveActive;
+            if (!isKept)
+                await docker.Containers.StopContainerAsync(container.ID, new ContainerStopParameters(), cancellationToken);
+        }
+
+        var allParentImageIds = allPiployImages.Where(x => x.ParentID != null).Select(x => x.ParentID).ToHashSet();
+        //All non intermediate images
+        var allActualImages = allPiployImages.Where(x => !allParentImageIds.Contains(x.ID)).ToList();
+
+
+        var imagesToDelete = alsoRemoveActive
+            ? allActualImages
+            : allActualImages.Where(x => !HasLatestTag(x)).ToList();
+
+        foreach(var imageToDelete in imagesToDelete)
+        {
+            await docker.Images.DeleteImageAsync(imageToDelete.ID, new ImageDeleteParameters { Force = true }, cancellationToken);
+        }
+    }
+
     private async Task<ImagesListResponse?> GetExistingImageByVersion(DockerClient docker, string versionTag, CancellationToken cancellationToken) =>
         (await docker.Images.ListImagesAsync(new ImagesListParameters
         {
@@ -147,6 +195,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
 
     //NOTE: Docker will throw if the reference is not all lowercase
     private string GetImageVersionTag(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
+    private static string ImageAppLabelName => $"{Piploy}_appName";
 
     private string GetImageVersionTag(string appName, GitCommit commit) => GetImageVersionTag(appName, commit.Value);
 
