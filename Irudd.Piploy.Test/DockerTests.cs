@@ -71,13 +71,11 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
     }
 
     public async Task DisposeAsync()
-    {
-        /*
+    {        
         //TODO: We should run it before every test but just once after all the tests so this should be moved to a fixture class
         var docker = new PiployDockerCleanupService();
         using var tokenSource = new CancellationTokenSource();
         tokenSource.CancelAfter(30000);
         await docker.CleanupTestCreated(tokenSource.Token);
-        */
     }
 }
