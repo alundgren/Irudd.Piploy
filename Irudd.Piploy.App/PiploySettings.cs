@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 
 namespace Irudd.Piploy.App;
 
@@ -19,7 +20,7 @@ public class PiploySettings
     /// </summary>
     public bool? IsTestRun { get; set; }
 
-    public class Application
+    public class Application : IValidatableObject
     {
         [Required]
         [RegularExpression(@"^[A-Za-z0-9_-]+$")]
@@ -40,9 +41,47 @@ public class PiploySettings
         [Required]
         public string DockerfilePath { get; set; } = null!;
 
+        /// <summary>
+        /// Same format as docker run -p <hostport>:<containerport>
+        /// So for example to map an nginx container using port 80 to serve web content 
+        /// onto port 8080 on the host use: TcpPortMappings = ["8080:80"]
+        /// 
+        /// We only support tcp and only single port to single port.
+        /// </summary>
+        public List<string>? PortMappings { get; set; }
+
+        public List<(int HostPort, int ContainerPort)> GetPortMappings() => 
+            ParsePortMappings(x => x, errorMessage => throw new Exception(errorMessage));
+
+        private T ParsePortMappings<T>(Func<List<(int HostPort, int ContainerPort)>, T> onSuccess, Func<string, T> onError)
+        {
+            var mappings = new List<(int HostPort, int ContainerPort)>();
+            var pattern = new Regex(@"^(\d+):(\d+)$");
+            foreach(var mappingString in (PortMappings ?? Enumerable.Empty<string>()))
+            {
+                var match = pattern.Match(mappingString);
+                if (!match.Success)
+                    return onError("Invalid port mappings. Must have the format <hostPort>:<containerPort>");
+                mappings.Add((
+                    int.Parse(match.Groups[1].Value), 
+                    int.Parse(match.Groups[2].Value)));
+            }
+
+            return onSuccess(mappings);
+        }
+
         public string GetRootDirectory(PiploySettings settings) => Path.Combine(settings.RootDirectory, Name);
 
         public string GetRepoDirectory(PiploySettings settings) => Path.Combine(GetRootDirectory(settings), "repo");
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            var portMappingsError = ParsePortMappings(
+                mappings => null, 
+                errorMessage => (ValidationResult?)new ValidationResult(errorMessage, [nameof(PortMappings)]));
+            if (portMappingsError != null)
+                yield return portMappingsError;
+        }
     }
 }
 

@@ -103,17 +103,19 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
 
         var commitImageTag = GetImageVersionTagCommit(application.Name, commit);
 
+        var portBindings = application
+            .GetPortMappings()
+            .ToDictionary(
+                x => $"{x.ContainerPort}/tcp", 
+                x => (IList<PortBinding>)new List<PortBinding> { new PortBinding { HostPort = x.HostPort.ToString() } });
+
         var createContainerParameters = new CreateContainerParameters
         {
             Image = commitImageTag,
             Name = containerName,
             HostConfig = new HostConfig
             {
-                //TODO: Port bindings from settings
-                PortBindings = new Dictionary<string, IList<PortBinding>>
-                {
-                    { "80/tcp", new List<PortBinding> { new PortBinding { HostPort = "8084" } } }
-                },
+                PortBindings = portBindings
                 AutoRemove = true
             }
         };
