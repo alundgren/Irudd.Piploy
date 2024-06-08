@@ -2,7 +2,6 @@
 using Docker.DotNet.Models;
 using Microsoft.Extensions.Options;
 using System.Formats.Tar;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace Irudd.Piploy.App;
 
@@ -23,9 +22,9 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
     {
         using var docker = new DockerClientConfiguration().CreateClient();
 
-        var versionTag = GetImageVersionTag(application.Name, commit);
+        var commitVersionTag = GetImageVersionTagCommit(application.Name, commit);
 
-        var existingImage = await GetExistingImageByVersion(docker, versionTag, cancellationToken);
+        var existingImage = await GetExistingImageByVersion(docker, commitVersionTag, cancellationToken);
 
         if (existingImage != null)
             return (false, existingImage.ID);
@@ -44,33 +43,45 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         await TarFile.CreateFromDirectoryAsync(absoluteDockerContextDirectory, tarFile, false, cancellationToken: cancellationToken);
         tarFile.Position = 0;
 
+        var uniqueId = Guid.NewGuid();
         await docker.Images.BuildImageFromDockerfileAsync(new ImageBuildParameters
         {
             Tags = new List<string>
             {
-                GetImageVersionTag(application.Name, "latest"),
-                versionTag,
+                GetImageVersionTagLatest(application.Name),
+                commitVersionTag,
                 //This exists to make sure that even if the same git commit is built twice for some reason we always have at least one unique tag per image
-                GetImageVersionTag(application.Name, Guid.NewGuid().ToString())
+                GetImageVersionTagUniqueId(application.Name, uniqueId)
             },
             BuildArgs = new Dictionary<string, string>(), //TODO: Figure out what goes here
-            Labels = new Dictionary<string, string>
-            {
-                [$"{Piploy}_buildDate"] = DateTimeOffset.UtcNow.ToString("u"),
-                [ImageAppLabelName] = application.Name,
-                [$"{Piploy}_gitTipCommit"] = commit.Value
-            },
+            Labels = GetImagesLabels(application, commit, uniqueId),
             Dockerfile = dockerfilename //NOTE: This is just the name since the tarfile we send has the docker context directory as it's root
         },
         tarFile, Array.Empty<AuthConfig>(), new Dictionary<string, string>(),
         new ProgressTracer(), cancellationToken: cancellationToken);
 
-        existingImage = await GetExistingImageByVersion(docker, versionTag, cancellationToken);
+        existingImage = await GetExistingImageByVersion(docker, commitVersionTag, cancellationToken);
 
         if (existingImage == null)
             throw new Exception($"Failed to create image for {application.Name}");
         
         return (true, existingImage.ID);
+    }
+    
+    private Dictionary<string, string> GetImagesLabels(PiploySettings.Application application, GitCommit commit, Guid uniqueId)
+    {
+        var labels = new Dictionary<string, string>
+        {
+            [$"{Piploy}_buildDate"] = DateTimeOffset.UtcNow.ToString("u"),
+            [ImageAppLabelName] = application.Name,
+            [$"{Piploy}_gitTipCommit"] = commit.Value,
+            [$"{Piploy}_uniqueId"] = uniqueId.ToString()
+        };
+        
+        if (Settings.IsTestRun == true)
+            labels[TestMarkerLabelName] = "true";
+
+        return labels;
     }
 
     public async Task<(bool WasCreated, bool WasStarted, string ContainerId)> EnsureContainerRunning(PiploySettings.Application application, GitCommit commit, CancellationToken cancellationToken)
@@ -90,11 +101,11 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
             }, cancellationToken);
         }
 
-        var imageTag = GetImageVersionTag(application.Name, commit);
+        var commitImageTag = GetImageVersionTagCommit(application.Name, commit);
 
         var createContainerParameters = new CreateContainerParameters
         {
-            Image = imageTag,
+            Image = commitImageTag,
             Name = containerName,
             HostConfig = new HostConfig
             {
@@ -110,7 +121,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         var response = await docker.Containers.CreateContainerAsync(createContainerParameters, cancellationToken: cancellationToken);
         //TODO: Logg this Output.WriteLine(JsonConvert.SerializeObject(response));
         if (response.ID == null)
-            throw new Exception($"Failed to create container for {application.Name}. Image used: {imageTag}.");
+            throw new Exception($"Failed to create container for {application.Name}. Image used: {commitImageTag}.");
 
         try
         {
@@ -143,12 +154,15 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
                 { "name", new Dictionary<string, bool> { { containerName, true } } }
             }
         })).FirstOrDefault();
-
+        
+    public static string GetImageVersionTagLatest(string appName) => GetImageVersionTagx(appName, "latest");    
+    private string GetImageVersionTagCommit(string appName, GitCommit commit) => GetImageVersionTagx(appName, $"g_{commit.Value}");
+    private string GetImageVersionTagUniqueId(string appName, Guid uniqueId) => GetImageVersionTagx(appName, $"v_{uniqueId.ToString()}");
     //NOTE: Docker will throw if the reference is not all lowercase
-    public static string GetImageVersionTag(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
-    public static string ImageAppLabelName => $"{Piploy}_appName";
+    private static string GetImageVersionTagx(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
 
-    private string GetImageVersionTag(string appName, GitCommit commit) => GetImageVersionTag(appName, commit.Value);
+    public static string ImageAppLabelName => $"{Piploy}_appName";
+    public static string TestMarkerLabelName => $"{Piploy}_isCreatedByTest";    
 
     public static (string ContextDirectory, string Dockerfilename) GetDockerfilePathFromSetting(string dockerPathSetting)
     {
@@ -169,15 +183,4 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
     {
         public void Report(JSONMessage value) {} //TODO: Log JSonConvert.SerializeObject ... seems to be just one filled out at a time
     }
-    /*
-    public async Task EnsureContainerExistsAndIsRunning(PiploySettings.Application application, CancellationToken cancellationToken)
-    {
-        throw new NotImplementedException();
-    }
-
-    public async Task PruneUnusedImages(PiploySettings.Application application, CancellationToken cancellationToken)
-    {
-        throw new NotImplementedException();
-    }
-    */
 }

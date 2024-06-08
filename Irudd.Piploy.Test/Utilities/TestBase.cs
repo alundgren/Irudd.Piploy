@@ -59,7 +59,8 @@ public abstract class TestBase(ITestOutputHelper output)
                     DockerfilePath = "app2/Dockerfile"
                 }
             },
-            RootDirectory = applicationRootDirectory,            
+            RootDirectory = applicationRootDirectory,
+            IsTestRun = true
         };
 
         var remote = new FakeGitRepository(remoteDirectory);

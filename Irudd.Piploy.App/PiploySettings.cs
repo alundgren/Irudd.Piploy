@@ -12,6 +12,13 @@ public class PiploySettings
     [ValidateEnumeratedItems]
     public List<Application> Applications { get; set; } = null!;
 
+    /// <summary>
+    /// Adds a special marker label piploy_isCreatedByTest = "true" to the images
+    /// so we can stop and delete everything between tests safely without nuking
+    /// any real user images or containers on the same machine.
+    /// </summary>
+    public bool? IsTestRun { get; set; }
+
     public class Application
     {
         [Required]

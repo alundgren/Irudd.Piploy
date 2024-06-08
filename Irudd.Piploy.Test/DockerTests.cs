@@ -67,7 +67,7 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
         var docker = new PiployDockerCleanupService();
         using var tokenSource = new CancellationTokenSource();
         tokenSource.CancelAfter(30000);
-        await docker.CleanupAll(tokenSource.Token);
+        await docker.CleanupTestCreated(tokenSource.Token);
     }
 
     public async Task DisposeAsync()
@@ -76,6 +76,6 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
         var docker = new PiployDockerCleanupService();
         using var tokenSource = new CancellationTokenSource();
         tokenSource.CancelAfter(30000);
-        await docker.CleanupAll(tokenSource.Token);
+        await docker.CleanupTestCreated(tokenSource.Token);
     }
 }

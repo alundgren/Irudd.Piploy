@@ -8,49 +8,49 @@ public class PiployDockerCleanupService
     /// <summary>
     /// Delete images and containers created by us.
     /// Keeps the latest version of each application and it's running containers.
-    /// 
-    /// NOTE: We lean on that all our containers are created with delete on stop
-    ///       hence why no deletes for containers.
     /// </summary>
-    /// <param name="alsoRemoveActive"></param>
     public async Task CleanupInactive(CancellationToken cancellationToken, List<PiploySettings.Application> applications)
     {
         using var docker = new DockerClientConfiguration().CreateClient();
 
-        var (allPiployImages, allPiployContainers) = await GetAllPiployImagesAndContainers(docker, cancellationToken);
+        var allPiployImages = await GetAllPiployImages(docker, cancellationToken);
 
-        var latestApplicationTags = applications.Select(x => PiployDockerService.GetImageVersionTag(x.Name, "latest")).ToHashSet();
+        var latestApplicationTags = applications.Select(x => PiployDockerService.GetImageVersionTagLatest(x.Name)).ToHashSet();
         bool HasLatestTag(ImagesListResponse image) => (image.RepoTags ?? new List<string>()).Intersect(latestApplicationTags).Any();
 
-        var imagesIdsToKeep = allPiployImages.Where(HasLatestTag).Select(x => x.ID).ToHashSet();
+        var imagesToDelete = allPiployImages.Where(x => !HasLatestTag(x)).ToList();
 
-        var containersToStop = allPiployContainers.Where(x => !imagesIdsToKeep.Contains(x.ImageID)).ToList();
-        await StopContainers(docker, containersToStop, cancellationToken);
-
-        var imagesToDelete = allPiployImages.Where(x => !imagesIdsToKeep.Contains(x.ID)).ToList();
-        await DeleteImages(docker, imagesToDelete, cancellationToken);
+        await StopContainersAndDeleteImages(docker, imagesToDelete, cancellationToken);
     }
 
     /// <summary>
-    /// Delete all images and containers created by us including running containers and the latest version
-    /// of images
-    /// 
-    /// NOTE: We lean on that all our containers are created with delete on stop
-    ///       hence why no deletes for containers.
+    /// Delete all images and containers created by us including running containers and the latest version of images
     /// </summary>
     public async Task CleanupAll(CancellationToken cancellationToken)
     {
         using var docker = new DockerClientConfiguration().CreateClient();
 
-        var (allPiployImages, allPiployContainers) = await GetAllPiployImagesAndContainers(docker, cancellationToken);
+        var allPiployImages = await GetAllPiployImages(docker, cancellationToken);
 
-        await StopContainers(docker, allPiployContainers, cancellationToken);
-        await DeleteImages(docker, allPiployImages, cancellationToken);
+        await StopContainersAndDeleteImages(docker, allPiployImages, cancellationToken);
     }
 
-    private async Task<(List<ImagesListResponse> Images, List<ContainerListResponse> Containers)> GetAllPiployImagesAndContainers(DockerClient docker, CancellationToken cancellationToken)
+    /// <summary>
+    /// Delete all images and containers created by our integration tests
+    /// </summary>
+    public async Task CleanupTestCreated(CancellationToken cancellationToken)
     {
-        var images = (await docker.Images
+        using var docker = new DockerClientConfiguration().CreateClient();
+
+        var allPiployImages = await GetAllPiployImages(docker, cancellationToken);
+
+        var testImages = allPiployImages.Where(x => x.Labels.ContainsKey(PiployDockerService.TestMarkerLabelName)).ToList();
+
+        await StopContainersAndDeleteImages(docker, testImages, cancellationToken);
+    }
+
+    private async Task<List<ImagesListResponse>> GetAllPiployImages(DockerClient docker, CancellationToken cancellationToken) =>    
+        (await docker.Images
             .ListImagesAsync(new ImagesListParameters { All = true }, cancellationToken: cancellationToken))
             .Where(x => 
                 //Make sure its a piploy image
@@ -59,26 +59,19 @@ public class PiployDockerCleanupService
                 x.RepoTags != null && x.RepoTags.Count > 0)
             .ToList();
 
-        var allImageIds = images.Select(x => x.ID).ToHashSet();
-
+    private async Task StopContainersAndDeleteImages(DockerClient docker, List<ImagesListResponse> images, CancellationToken cancellationToken)
+    {
+        var imageIds = images.Select(x => x.ID).ToHashSet();
         var containers = (await docker.Containers
             .ListContainersAsync(new ContainersListParameters { All = true }))
-            .Where(x => allImageIds.Contains(x.ImageID))
+            .Where(x => imageIds.Contains(x.ImageID))
             .ToList();
 
-        return (Images: images, Containers: containers);
-    }
-
-    private async Task StopContainers(DockerClient docker, List<ContainerListResponse> containers, CancellationToken cancellationToken)
-    {
         foreach (var container in containers)
         {
             await docker.Containers.StopContainerAsync(container.ID, new ContainerStopParameters(), cancellationToken);
         }
-    }
 
-    private async Task DeleteImages(DockerClient docker, List<ImagesListResponse> images, CancellationToken cancellationToken)
-    {
         foreach (var image in images)
         {
             await docker.Images.DeleteImageAsync(image.ID, new ImageDeleteParameters { Force = true }, cancellationToken);
