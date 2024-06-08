@@ -1,6 +1,5 @@
 using Irudd.Piploy.App;
 using Irudd.Piploy.Test.Utilities;
-using Microsoft.Extensions.Options;
 using Xunit.Abstractions;
 
 namespace Irudd.Piploy.Test;
@@ -65,24 +64,18 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
 
     public async Task InitializeAsync()
     {
-        var docker = new PiployDockerService(Options.Create(new PiploySettings
-        {
-            Applications = new List<PiploySettings.Application>()
-        }));
+        var docker = new PiployDockerCleanupService();
         using var tokenSource = new CancellationTokenSource();
         tokenSource.CancelAfter(30000);
-        await docker.Cleanup(tokenSource.Token, alsoRemoveActive: true);
+        await docker.CleanupAll(tokenSource.Token);
     }
 
     public async Task DisposeAsync()
     {
         //TODO: We should run it before every test but just once after all the tests so this should be moved to a fixture class
-        var docker = new PiployDockerService(Options.Create(new PiploySettings
-        {
-            Applications = new List<PiploySettings.Application>()
-        }));
+        var docker = new PiployDockerCleanupService();
         using var tokenSource = new CancellationTokenSource();
         tokenSource.CancelAfter(30000);
-        await docker.Cleanup(tokenSource.Token, alsoRemoveActive: true);
+        await docker.CleanupAll(tokenSource.Token);
     }
 }

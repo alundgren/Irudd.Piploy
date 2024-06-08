@@ -8,7 +8,7 @@ namespace Irudd.Piploy.App;
 
 public class PiployDockerService(IOptions<PiploySettings> settings)
 {
-    const string Piploy = "piploy";
+    public const string Piploy = "piploy";
 
     /*
      Docker library: 
@@ -50,6 +50,8 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
             {
                 GetImageVersionTag(application.Name, "latest"),
                 versionTag,
+                //This exists to make sure that even if the same git commit is built twice for some reason we always have at least one unique tag per image
+                GetImageVersionTag(application.Name, Guid.NewGuid().ToString())
             },
             BuildArgs = new Dictionary<string, string>(), //TODO: Figure out what goes here
             Labels = new Dictionary<string, string>
@@ -124,57 +126,6 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         }
     }
 
-    /// <summary>
-    /// Delete images and containers created by us.
-    /// By default only removes unused images and containers but
-    /// with alsoRemoveActive = true we remove everything.
-    /// 
-    /// NOTE: We lean on that all our containers are created with delete on stop
-    ///       hence why no deletes for containers.
-    /// </summary>
-    /// <param name="alsoRemoveActive"></param>
-    public async Task Cleanup(CancellationToken cancellationToken, bool alsoRemoveActive = false)
-    {
-        using var docker = new DockerClientConfiguration().CreateClient();
-
-        var allPiployImages = (await docker.Images.ListImagesAsync(new ImagesListParameters
-            {
-                All = true
-            }, cancellationToken: cancellationToken))
-            .Where(x => x.Labels.ContainsKey(ImageAppLabelName))
-        .ToList();
-
-        var allImageIds = allPiployImages.Select(x => x.ID).ToHashSet();
-
-        var allPiployContainers = (await docker.Containers.ListContainersAsync(new ContainersListParameters { All = true })).Where(x => allImageIds.Contains(x.ImageID)).ToList();
-
-        var latestApplicationTags = Settings.Applications.Select(x => GetImageVersionTag(x.Name, "latest")).ToHashSet();
-        bool HasLatestTag(ImagesListResponse image) => (image.RepoTags ?? new List<string>()).Intersect(latestApplicationTags).Any();
-
-        //Stop containers if needed
-        foreach (var container in allPiployContainers)
-        {
-            var containerImage = allPiployImages.Single(x => x.ID == container.ImageID);
-            var isKept = HasLatestTag(containerImage) && !alsoRemoveActive;
-            if (!isKept)
-                await docker.Containers.StopContainerAsync(container.ID, new ContainerStopParameters(), cancellationToken);
-        }
-
-        var allParentImageIds = allPiployImages.Where(x => x.ParentID != null).Select(x => x.ParentID).ToHashSet();
-        //All non intermediate images
-        var allActualImages = allPiployImages.Where(x => !allParentImageIds.Contains(x.ID)).ToList();
-
-
-        var imagesToDelete = alsoRemoveActive
-            ? allActualImages
-            : allActualImages.Where(x => !HasLatestTag(x)).ToList();
-
-        foreach(var imageToDelete in imagesToDelete)
-        {
-            await docker.Images.DeleteImageAsync(imageToDelete.ID, new ImageDeleteParameters { Force = true }, cancellationToken);
-        }
-    }
-
     private async Task<ImagesListResponse?> GetExistingImageByVersion(DockerClient docker, string versionTag, CancellationToken cancellationToken) =>
         (await docker.Images.ListImagesAsync(new ImagesListParameters
         {
@@ -188,14 +139,14 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
         (await docker.Containers.ListContainersAsync(new ContainersListParameters
         {
             Filters = new Dictionary<string, IDictionary<string, bool>>
-                        {
-                            { "name", new Dictionary<string, bool> { { containerName, true } } }
-                        }
+            {
+                { "name", new Dictionary<string, bool> { { containerName, true } } }
+            }
         })).FirstOrDefault();
 
     //NOTE: Docker will throw if the reference is not all lowercase
-    private string GetImageVersionTag(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
-    private static string ImageAppLabelName => $"{Piploy}_appName";
+    public static string GetImageVersionTag(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
+    public static string ImageAppLabelName => $"{Piploy}_appName";
 
     private string GetImageVersionTag(string appName, GitCommit commit) => GetImageVersionTag(appName, commit.Value);
 
