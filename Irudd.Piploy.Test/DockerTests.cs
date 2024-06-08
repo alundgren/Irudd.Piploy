@@ -7,20 +7,10 @@ namespace Irudd.Piploy.Test;
 public class DockerTests(ITestOutputHelper output) : TestBase(output)
 {
     [Fact]
-    public async Task Foo()
-    {
-        using var context = SetupTest(preserveTestDirectory: false);
-        using var tokenSource = new CancellationTokenSource();
-        var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
-
-        await context.Docker.Cleanup(tokenSource.Token, alsoRemoveActive: false);
-    }
-
-    [Fact]
     public async Task EnsureImage()
     {
         //TODO: How to reset docker state before tests or at least ensure we dont just blow it up with infinite test containers/images
-        using var context = SetupTest(preserveTestDirectory: false);
+        using var context = await SetupDockerTest(preserveTestDirectory: false);
         using var tokenSource = new CancellationTokenSource();
         var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
         var app1 = context.App1Application;
@@ -40,7 +30,7 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
     [Fact]
     public async Task EnsureRunningContainer()
     {
-        using var context = SetupTest(preserveTestDirectory: false);
+        using var context = await SetupDockerTest(preserveTestDirectory: false);
         using var tokenSource = new CancellationTokenSource();
         var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
         var app1 = context.App1Application;
@@ -70,5 +60,18 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output)
 
         Assert.Equal(expectedContextDirectory, contextDirectory);
         Assert.Equal(expectedDockerfilename, dockerFilename);
+    }
+
+    private async Task<TestContext> SetupDockerTest(bool preserveTestDirectory = false)
+    {
+        var context = SetupTest(preserveTestDirectory: preserveTestDirectory);
+
+        using var tokenSource = new CancellationTokenSource();
+        tokenSource.CancelAfter(30000);
+        /* TODO: Change so we have a special label for the images and containers created by the tests 
+         and filter by that so someone doesnt mess up their real setup by running the test on the same machine*/
+        await context.Docker.Cleanup(tokenSource.Token, alsoRemoveActive: true);
+
+        return context;
     }
 }
