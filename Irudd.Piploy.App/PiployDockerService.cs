@@ -105,8 +105,8 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
 
         var commitImageTag = GetImageVersionTagCommit(application.Name, commit);
 
-        var portBindings = application
-            .GetPortMappings()
+        var portMappings = application.GetPortMappings();
+        var portBindings = portMappings
             .ToDictionary(
                 x => $"{x.ContainerPort}/tcp", 
                 x => (IList<PortBinding>)new List<PortBinding> { new PortBinding { HostPort = x.HostPort.ToString() } });
@@ -119,7 +119,8 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
             {
                 PortBindings = portBindings,
                 AutoRemove = true
-            }
+            },
+            ExposedPorts = portMappings.ToDictionary(x => $"{x.ContainerPort}/tcp", _ => new EmptyStruct())
         };
 
         var response = await docker.Containers.CreateContainerAsync(createContainerParameters, cancellationToken: cancellationToken);
