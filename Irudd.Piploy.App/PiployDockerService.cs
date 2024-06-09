@@ -115,7 +115,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
             Name = containerName,
             HostConfig = new HostConfig
             {
-                PortBindings = portBindings
+                PortBindings = portBindings,
                 AutoRemove = true
             }
         };

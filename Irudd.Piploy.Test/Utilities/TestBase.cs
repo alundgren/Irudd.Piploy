@@ -51,14 +51,14 @@ public abstract class TestBase(ITestOutputHelper output)
                     GitRepositoryUrl = remoteDirectory,
                     Name = "app1",
                     DockerfilePath = "app1/Dockerfile",
-                    PortMappings = new List<string> { "8084:80" }
+                    PortMappings = new List<string> { "8085:80" }
                 },
                 new PiploySettings.Application
                 {
                     GitRepositoryUrl = remoteDirectory,
                     Name = "app2",
                     DockerfilePath = "app2/Dockerfile",
-                    PortMappings = new List<string> { "8085:80" }
+                    PortMappings = new List<string> { "8086:80" }
                 }
             },
             RootDirectory = applicationRootDirectory,
