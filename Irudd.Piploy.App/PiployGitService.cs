@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 
 namespace Irudd.Piploy.App;
 
+//TODO: Support using a different branch than HEAD
 public class PiployGitService(IOptions<PiploySettings> settings)
 {
     /*
@@ -34,7 +35,7 @@ public class PiployGitService(IOptions<PiploySettings> settings)
             var remoteBranchRef = repo.Branches[$"{repo.Head.RemoteName}/{repo.Head.FriendlyName}"];
             if (remoteBranchRef.Tip != repo.Head.Tip)
             {
-                //git reset --hard origin/master
+                //git reset --hard origin/<branch>
                 var commit = remoteBranchRef.Tip;
                 repo.Reset(ResetMode.Hard, remoteBranchRef.Tip);
             }
@@ -43,5 +44,11 @@ public class PiployGitService(IOptions<PiploySettings> settings)
         {
             Repository.Clone(application.GitRepositoryUrl, repoDirectory);
         }
+    }
+
+    public GitCommit GetLatestCommit(PiploySettings.Application application)
+    {
+        using var repo = new Repository(application.GetRepoDirectory(Settings));
+        return GitCommit.FromLibGit2SharpCommit(repo.Head.Tip);
     }
 }

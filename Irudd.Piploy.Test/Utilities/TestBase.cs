@@ -14,7 +14,7 @@ public abstract class TestBase(ITestOutputHelper output)
       bool preserveTestDirectory) : IDisposable
     {
         public PiployGitService Git { get; } = new PiployGitService(Options.Create(settings));
-        public PiployDockerService Docker { get; } = new PiployDockerService(Options.Create(settings));
+        public PiployDockerService Docker { get; } = new PiployDockerService(Options.Create(settings), new PiployDockerCleanupService());
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 

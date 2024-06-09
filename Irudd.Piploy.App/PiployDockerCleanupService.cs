@@ -54,7 +54,7 @@ public class PiployDockerCleanupService
             .ListImagesAsync(new ImagesListParameters { All = true }, cancellationToken: cancellationToken))
             .Where(x => 
                 //Make sure its a piploy image
-                x.Labels.ContainsKey(PiployDockerService.ImageAppLabelName) && 
+                x.Labels != null && x.Labels.ContainsKey(PiployDockerService.ImageAppLabelName) && 
                 //Remove intermediate (all our containers have at least the uuid version tag)
                 x.RepoTags != null && x.RepoTags.Count > 0)
             .ToList();
@@ -76,5 +76,14 @@ public class PiployDockerCleanupService
         {
             await docker.Images.DeleteImageAsync(image.ID, new ImageDeleteParameters { Force = true }, cancellationToken);
         }
+
+        //Remove dangling images (docker image prune)
+        await docker.Images.PruneImagesAsync(parameters: new ImagesPruneParameters 
+        {
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["dangling"] = new Dictionary<string, bool> { ["true"] = true }
+            }
+        }, cancellationToken);
     }
 }

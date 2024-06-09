@@ -31,12 +31,18 @@ async Task Service(InvocationContext context)
     await host.StartAsync(tokenSource.Token);
 }
 
-Task Poll(InvocationContext context)
+async Task Poll(InvocationContext context)
 {
     var host = HostBuilder.CreateConfigOnlyHost(args);
-    var service = host.Services.GetRequiredService<PiployGitService>();
-    service.EnsureLocalRepositories();
-    return Task.CompletedTask;
+    var service = host.Services.GetRequiredService<PiployService>();
+    await service.Poll(tokenSource.Token);
+}
+
+async Task WipeAll(InvocationContext context)
+{
+    var host = HostBuilder.CreateConfigOnlyHost(args);
+    var service = host.Services.GetRequiredService<PiployService>();
+    await service.WipeAll(tokenSource.Token);
 }
 
 async Task Test(InvocationContext context)
@@ -69,6 +75,7 @@ void AddCommand(string name, string description, Func<InvocationContext, Task> h
 AddCommand("status", "Service status", Status);
 AddCommand("service", "Run as service", Service);
 AddCommand("poll", "Poll for changes now", Poll);
+AddCommand("wipeall", "Wipes out all local repos, docker images and containers", WipeAll);
 AddCommand("test", "Temp test", Test);
 
 await rootCommand.InvokeAsync(args);

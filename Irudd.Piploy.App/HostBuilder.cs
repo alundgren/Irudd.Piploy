@@ -37,5 +37,8 @@ internal class HostBuilder
                 .ValidateDataAnnotations()
                 .ValidateOnStart();
             services.AddScoped<PiployGitService>();
+            services.AddScoped<PiployDockerService>();
+            services.AddScoped<PiployDockerCleanupService>();
+            services.AddScoped<PiployService>();
         });
 }

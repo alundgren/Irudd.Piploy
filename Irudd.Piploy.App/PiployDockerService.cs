@@ -5,7 +5,7 @@ using System.Formats.Tar;
 
 namespace Irudd.Piploy.App;
 
-public class PiployDockerService(IOptions<PiploySettings> settings)
+public class PiployDockerService(IOptions<PiploySettings> settings, PiployDockerCleanupService cleanup)
 {
     public const string Piploy = "piploy";
 
@@ -17,6 +17,8 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
      */
 
     private PiploySettings Settings => settings.Value;
+
+    public PiployDockerCleanupService Cleanup => cleanup;
 
     public async Task<(bool WasCreated, string ImageId)> EnsureImageExists(PiploySettings.Application application, GitCommit commit, CancellationToken cancellationToken)
     {
@@ -155,13 +157,13 @@ public class PiployDockerService(IOptions<PiploySettings> settings)
             {
                 { "name", new Dictionary<string, bool> { { containerName, true } } }
             }
-        })).FirstOrDefault();
+        }, cancellationToken)).FirstOrDefault();
         
-    public static string GetImageVersionTagLatest(string appName) => GetImageVersionTagx(appName, "latest");    
-    private string GetImageVersionTagCommit(string appName, GitCommit commit) => GetImageVersionTagx(appName, $"g_{commit.Value}");
-    private string GetImageVersionTagUniqueId(string appName, Guid uniqueId) => GetImageVersionTagx(appName, $"v_{uniqueId.ToString()}");
+    public static string GetImageVersionTagLatest(string appName) => GetImageVersionTag(appName, "latest");    
+    private string GetImageVersionTagCommit(string appName, GitCommit commit) => GetImageVersionTag(appName, $"g_{commit.Value}");
+    private string GetImageVersionTagUniqueId(string appName, Guid uniqueId) => GetImageVersionTag(appName, $"v_{uniqueId.ToString()}");
     //NOTE: Docker will throw if the reference is not all lowercase
-    private static string GetImageVersionTagx(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
+    private static string GetImageVersionTag(string appName, string versionValue) => $"{Piploy}/{appName}:{versionValue}".ToLowerInvariant();
 
     public static string ImageAppLabelName => $"{Piploy}_appName";
     public static string TestMarkerLabelName => $"{Piploy}_isCreatedByTest";    
