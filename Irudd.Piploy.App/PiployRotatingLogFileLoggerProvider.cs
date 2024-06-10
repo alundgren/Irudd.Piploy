@@ -100,4 +100,6 @@ public static class PiployILoggerExtensions
         source.BeginPiployScope("application", value);
     public static IDisposable? BeginPiployOperationScope<T>(this ILogger<T> source, string value) =>
         source.BeginPiployScope("operation", value);
+    public static IDisposable? BeginPiployGitRepositoryScope<T>(this ILogger<T> source, string value) =>
+        source.BeginPiployScope("gitRepository", value);
 }

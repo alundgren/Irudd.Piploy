@@ -10,24 +10,26 @@ public abstract class TestBase(ITestOutputHelper output)
 {
     protected ITestOutputHelper Output => output;
 
-    protected class TestContext(FakeGitRepository fakeRemote, PiploySettings settings,
-      ITestOutputHelper output,
-      string tempTestDirectory,
-      bool preserveTestDirectory) : IDisposable
+    protected class TestContext : IDisposable
     {
-        /*
-        var serviceProvider = new ServiceCollection()
-            .AddLogging()
-            .BuildServiceProvider();
+        private readonly FakeGitRepository fakeRemote;
+        private readonly PiploySettings settings;
+        private readonly ITestOutputHelper output;
+        private readonly string tempTestDirectory;
+        private readonly bool preserveTestDirectory;
 
-        var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
-        return loggerFactory.CreateLogger<T>();         
-         */
-
-        private static PiployDockerService CreateDockerService(PiploySettings settings)
+        public TestContext(
+            FakeGitRepository fakeRemote, 
+            PiploySettings settings,
+            ITestOutputHelper output,
+            string tempTestDirectory,
+            bool preserveTestDirectory)
         {
             var serviceProvider = new ServiceCollection()
                 .AddSingleton<IOptions<PiploySettings>>(_ => Options.Create(settings))
+                .AddSingleton<PiployGitService>()
+                .AddSingleton<PiployDockerService>()
+                .AddSingleton<PiployDockerCleanupService>()
                 .AddLogging(x =>
                 {
                     x.AddPiployRotatingFileLogger();
@@ -35,14 +37,18 @@ public abstract class TestBase(ITestOutputHelper output)
                 .BuildServiceProvider();
 
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
-            return new PiployDockerService(
-                Options.Create(settings),
-                new PiployDockerCleanupService(),
-                loggerFactory.CreateLogger<PiployDockerService>());
+            Git = serviceProvider.GetRequiredService<PiployGitService>();
+            Docker = serviceProvider.GetRequiredService<PiployDockerService>();
+            this.fakeRemote = fakeRemote;
+            this.settings = settings;
+            this.output = output;
+            this.tempTestDirectory = tempTestDirectory;
+            this.preserveTestDirectory = preserveTestDirectory;
         }
 
-        public PiployGitService Git { get; } = new PiployGitService(Options.Create(settings));
-        public PiployDockerService Docker { get; } = CreateDockerService(settings);
+
+        public PiployGitService Git { get; }
+        public PiployDockerService Docker { get; }
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 

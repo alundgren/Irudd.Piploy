@@ -30,7 +30,7 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
     [Fact]
     public async Task EnsureRunningContainer()
     {
-        using var context = SetupTest(preserveTestDirectory: false);
+        using var context = SetupTest(preserveTestDirectory: true);
         using var tokenSource = new CancellationTokenSource();
         var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
         var app1 = context.App1Application;

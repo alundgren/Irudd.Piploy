@@ -1,10 +1,11 @@
 ﻿using LibGit2Sharp;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Irudd.Piploy.App;
 
 //TODO: Support using a different branch than HEAD
-public class PiployGitService(IOptions<PiploySettings> settings)
+public class PiployGitService(IOptions<PiploySettings> settings, ILogger<PiployGitService> logger)
 {
     /*
      Git library documentation:
@@ -19,6 +20,8 @@ public class PiployGitService(IOptions<PiploySettings> settings)
     /// </summary>
     public void EnsureLocalRepository(PiploySettings.Application application)
     {
+        using var _ = logger.BeginPiployGitRepositoryScope(application.GitRepositoryUrl);
+
         var repoDirectory = application.GetRepoDirectory(Settings);
         if (!Directory.Exists(repoDirectory))
             Directory.CreateDirectory(repoDirectory);
@@ -28,6 +31,8 @@ public class PiployGitService(IOptions<PiploySettings> settings)
             using var repo = new Repository(repoDirectory);
 
             //git fetch origin
+            logger.LogInformation("Local exists. Fetching origin");
+
             var remote = repo.Network.Remotes[repo.Head.RemoteName];
             var refSpecs = remote.FetchRefSpecs.Select(x => x.Specification);
             Commands.Fetch(repo, remote.Name, refSpecs, new FetchOptions { }, "");
@@ -36,12 +41,18 @@ public class PiployGitService(IOptions<PiploySettings> settings)
             if (remoteBranchRef.Tip != repo.Head.Tip)
             {
                 //git reset --hard origin/<branch>
+                logger.LogInformation($"Latest remote commit {remoteBranchRef.Tip.Sha} is ahead of local. Resetting local to match");
                 var commit = remoteBranchRef.Tip;
                 repo.Reset(ResetMode.Hard, remoteBranchRef.Tip);
+            }
+            else
+            {
+                logger.LogInformation("Local is up-to-date with remote already");
             }
         }
         else
         {
+            logger.LogInformation("Cloning into remote");
             Repository.Clone(application.GitRepositoryUrl, repoDirectory);
         }
     }
