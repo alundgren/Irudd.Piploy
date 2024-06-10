@@ -18,11 +18,6 @@ internal class HostBuilder
         {
             services.AddHostedService<DeploymentBackgroundService>();
         })
-        .ConfigureLogging(logging =>
-        {
-            logging.ClearProviders();
-            logging.AddConsole();
-        })
         .Build();
 
     public static IHost CreateConfigOnlyHost(string[] args) => CreateBuilderWithConfigOnly(args).Build();
@@ -40,5 +35,11 @@ internal class HostBuilder
             services.AddScoped<PiployDockerService>();
             services.AddScoped<PiployDockerCleanupService>();
             services.AddScoped<PiployService>();
+        })
+        .ConfigureLogging(logging =>
+        {
+            logging.ClearProviders();
+            logging.AddConsole();
+            logging.AddPiployRotatingFileLogger();
         });
 }

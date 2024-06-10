@@ -1,13 +1,18 @@
-﻿using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Irudd.Piploy.App;
 
-public class PiployService(PiployDockerService docker, PiployGitService git, IOptions<PiploySettings> settings)
+public class PiployService(PiployDockerService docker, PiployGitService git, IOptions<PiploySettings> settings, ILogger<PiployService> logger)
 {
     public async Task Poll(CancellationToken cancellationToken)
     {
-        foreach(var application in settings.Value.Applications)
+        using var _ = logger.BeginPiployOperationScope("poll");
+
+        foreach (var application in settings.Value.Applications)
         {
+            using var __ = logger.BeginPiployApplicationScope(application.Name);
+
             git.EnsureLocalRepository(application);
             var latestCommit = git.GetLatestCommit(application);            
             var (wasImageCreated, imageId) = await docker.EnsureImageExists(application, latestCommit, cancellationToken);
@@ -19,6 +24,7 @@ public class PiployService(PiployDockerService docker, PiployGitService git, IOp
 
     public async Task WipeAll(CancellationToken cancellationToken)
     {
+        using var _ = logger.BeginPiployOperationScope("wipeall");
         await docker.Cleanup.CleanupAll(cancellationToken);
         DeleteRootDirectory();
     }

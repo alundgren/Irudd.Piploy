@@ -1,4 +1,6 @@
 ﻿using Irudd.Piploy.App;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit.Abstractions;
 
@@ -13,8 +15,34 @@ public abstract class TestBase(ITestOutputHelper output)
       string tempTestDirectory,
       bool preserveTestDirectory) : IDisposable
     {
+        /*
+        var serviceProvider = new ServiceCollection()
+            .AddLogging()
+            .BuildServiceProvider();
+
+        var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
+        return loggerFactory.CreateLogger<T>();         
+         */
+
+        private static PiployDockerService CreateDockerService(PiploySettings settings)
+        {
+            var serviceProvider = new ServiceCollection()
+                .AddSingleton<IOptions<PiploySettings>>(_ => Options.Create(settings))
+                .AddLogging(x =>
+                {
+                    x.AddPiployRotatingFileLogger();
+                })
+                .BuildServiceProvider();
+
+            var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+            return new PiployDockerService(
+                Options.Create(settings),
+                new PiployDockerCleanupService(),
+                loggerFactory.CreateLogger<PiployDockerService>());
+        }
+
         public PiployGitService Git { get; } = new PiployGitService(Options.Create(settings));
-        public PiployDockerService Docker { get; } = new PiployDockerService(Options.Create(settings), new PiployDockerCleanupService());
+        public PiployDockerService Docker { get; } = CreateDockerService(settings);
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 

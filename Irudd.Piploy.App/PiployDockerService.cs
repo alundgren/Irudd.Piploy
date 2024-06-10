@@ -1,11 +1,12 @@
 ﻿using Docker.DotNet;
 using Docker.DotNet.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Formats.Tar;
 
 namespace Irudd.Piploy.App;
 
-public class PiployDockerService(IOptions<PiploySettings> settings, PiployDockerCleanupService cleanup)
+public class PiployDockerService(IOptions<PiploySettings> settings, PiployDockerCleanupService cleanup, ILogger<PiployDockerService> logger)
 {
     public const string Piploy = "piploy";
 
@@ -22,6 +23,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
 
     public async Task<(bool WasCreated, string ImageId)> EnsureImageExists(PiploySettings.Application application, GitCommit commit, CancellationToken cancellationToken)
     {
+        logger.LogInformation("Ensure exists");
         using var docker = new DockerClientConfiguration().CreateClient();
 
         var commitVersionTag = GetImageVersionTagCommit(application.Name, commit);
