@@ -2,6 +2,7 @@
 using Docker.DotNet.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 using System.Formats.Tar;
 
 namespace Irudd.Piploy.App;
@@ -23,7 +24,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
 
     public async Task<(bool WasCreated, string ImageId)> EnsureImageExists(PiploySettings.Application application, GitCommit commit, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Ensure exists");
+        
         using var docker = new DockerClientConfiguration().CreateClient();
 
         var commitVersionTag = GetImageVersionTagCommit(application.Name, commit);
@@ -47,6 +48,8 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
         await TarFile.CreateFromDirectoryAsync(absoluteDockerContextDirectory, tarFile, false, cancellationToken: cancellationToken);
         tarFile.Position = 0;
 
+        logger.LogInformation($"Building docker image for commit {commit.Value}");
+
         var uniqueId = Guid.NewGuid();
         await docker.Images.BuildImageFromDockerfileAsync(new ImageBuildParameters
         {
@@ -62,7 +65,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
             Dockerfile = dockerfilename //NOTE: This is just the name since the tarfile we send has the docker context directory as it's root
         },
         tarFile, Array.Empty<AuthConfig>(), new Dictionary<string, string>(),
-        new ProgressTracer(), cancellationToken: cancellationToken);
+        new ProgressTracer(logger), cancellationToken: cancellationToken);
 
         existingImage = await GetExistingImageByVersion(docker, commitVersionTag, cancellationToken);
 
@@ -98,6 +101,7 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
 
         if(existingContainer != null)
         {
+            logger.LogInformation($"Stopping container {containerName}");
             //TODO: Check if already correct version and then just start it
             await docker.Containers.StopContainerAsync(existingContainer.ID, new ContainerStopParameters
             {
@@ -125,13 +129,15 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
             ExposedPorts = portMappings.ToDictionary(x => $"{x.ContainerPort}/tcp", _ => new EmptyStruct())
         };
 
+        logger.LogInformation($"Creating container {containerName}");
         var response = await docker.Containers.CreateContainerAsync(createContainerParameters, cancellationToken: cancellationToken);
-        //TODO: Logg this Output.WriteLine(JsonConvert.SerializeObject(response));
+        logger.LogInformation(JsonConvert.SerializeObject(response));
         if (response.ID == null)
             throw new Exception($"Failed to create container for {application.Name}. Image used: {commitImageTag}.");
 
         try
         {
+            logger.LogInformation($"Starting container {containerName}");
             bool wasStarted = await docker.Containers.StartContainerAsync(response.ID, new ContainerStartParameters());
 
             return (true, wasStarted, response.ID);
@@ -186,8 +192,8 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
             return (string.Join("/", segments.Take(segments.Length - 1)), segments.Last());
     }
 
-    private class ProgressTracer : IProgress<JSONMessage>
+    private class ProgressTracer(ILogger<PiployDockerService> logger) : IProgress<JSONMessage>
     {
-        public void Report(JSONMessage value) {} //TODO: Log JSonConvert.SerializeObject ... seems to be just one filled out at a time
+        public void Report(JSONMessage value) => logger.LogInformation(JsonConvert.SerializeObject(value));
     }
 }

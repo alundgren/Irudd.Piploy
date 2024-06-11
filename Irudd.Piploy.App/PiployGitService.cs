@@ -36,12 +36,12 @@ public class PiployGitService(IOptions<PiploySettings> settings, ILogger<PiployG
             var remote = repo.Network.Remotes[repo.Head.RemoteName];
             var refSpecs = remote.FetchRefSpecs.Select(x => x.Specification);
             Commands.Fetch(repo, remote.Name, refSpecs, new FetchOptions { }, "");
-
+            
             var remoteBranchRef = repo.Branches[$"{repo.Head.RemoteName}/{repo.Head.FriendlyName}"];
             if (remoteBranchRef.Tip != repo.Head.Tip)
             {
                 //git reset --hard origin/<branch>
-                logger.LogInformation($"Latest remote commit {remoteBranchRef.Tip.Sha} is ahead of local. Resetting local to match");
+                logger.LogInformation($"Latest remote {remoteBranchRef} {remoteBranchRef.Tip.Sha} is ahead of local. Resetting local to match");
                 var commit = remoteBranchRef.Tip;
                 repo.Reset(ResetMode.Hard, remoteBranchRef.Tip);
             }
