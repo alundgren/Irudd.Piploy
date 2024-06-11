@@ -30,7 +30,7 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
     [Fact]
     public async Task EnsureRunningContainer()
     {
-        using var context = SetupTest(preserveTestDirectory: true);
+        using var context = SetupTest(preserveTestDirectory: false);
         using var tokenSource = new CancellationTokenSource();
         var (_, _, commit) = context.FakeRemote.CreateWithDockerfiles();
         var app1 = context.App1Application;
@@ -41,6 +41,11 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
 
         Assert.True(wasCreated);
         Assert.True(wasStarted);
+
+        (wasCreated, wasStarted, containerId) = await context.Docker.EnsureContainerRunning(app1, commit, tokenSource.Token);
+
+        Assert.False(wasCreated);
+        Assert.False(wasStarted);
     }
 
     [Theory]

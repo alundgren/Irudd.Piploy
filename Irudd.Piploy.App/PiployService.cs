@@ -9,8 +9,10 @@ public class PiployService(PiployDockerService docker, PiployGitService git, IOp
     {
         using var _ = logger.BeginPiployOperationScope("poll");
 
+        logger.LogInformation("Polling applications");
         foreach (var application in settings.Value.Applications)
         {
+            logger.LogInformation($"Polling application: {application.Name}");
             using var __ = logger.BeginPiployApplicationScope(application.Name);
 
             git.EnsureLocalRepository(application);
@@ -19,6 +21,7 @@ public class PiployService(PiployDockerService docker, PiployGitService git, IOp
             var (wasContainerCreated, wasContainerStarted, containerId) = await docker
                 .EnsureContainerRunning(application, latestCommit, cancellationToken);
         }
+        logger.LogInformation("Cleaning up unused images");
         await docker.Cleanup.CleanupInactive(cancellationToken, settings.Value.Applications);
     }
 

@@ -101,12 +101,27 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
 
         if(existingContainer != null)
         {
-            logger.LogInformation($"Stopping container {containerName}");
-            //TODO: Check if already correct version and then just start it
-            await docker.Containers.StopContainerAsync(existingContainer.ID, new ContainerStopParameters
-            {
-                WaitBeforeKillSeconds = 5 //TODO: Configurable per app
-            }, cancellationToken);
+            if(existingContainer.Labels != null && existingContainer.Labels.Any(x => x.Key == $"{Piploy}_gitTipCommit" && x.Value == commit.Value))
+            {                
+                if(existingContainer.State == "exited" || existingContainer.State == "running")
+                {
+                    logger.LogInformation($"Container exists with the correct version already in state = {existingContainer.State}.");
+                    var wasStarted = false;
+                    if(existingContainer.State == "exited")
+                    {
+                        logger.LogInformation($"Starting container {containerName}");
+                        wasStarted = await docker.Containers.StartContainerAsync(existingContainer.ID, new ContainerStartParameters());
+                    }
+                    return (false, wasStarted, existingContainer.ID);
+                }
+                else
+                {
+                    logger.LogInformation($"Container exists with the correct version already. Current state = {existingContainer.State} is bad. Will be rebuilt.");
+                }
+            }
+
+            logger.LogInformation($"Removing container {containerName}");
+            await docker.Containers.RemoveContainerAsync(existingContainer.ID, new ContainerRemoveParameters { Force = true }, cancellationToken);
         }
 
         var commitImageTag = GetImageVersionTagCommit(application.Name, commit);

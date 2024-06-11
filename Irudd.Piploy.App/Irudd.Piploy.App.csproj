@@ -19,7 +19,7 @@
 
   <ItemGroup>
     <None Update="piploy.json">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 
