@@ -39,6 +39,8 @@ public class DockerTests(ITestOutputHelper output) : TestBase(output), IAsyncLif
 
         var (wasCreated, wasStarted, containerId) = await context.Docker.EnsureContainerRunning(app1, commit, tokenSource.Token);
 
+        Output.WriteLine(await context.Piploy.GetStatusText(tokenSource.Token));
+
         Assert.True(wasCreated);
         Assert.True(wasStarted);
 

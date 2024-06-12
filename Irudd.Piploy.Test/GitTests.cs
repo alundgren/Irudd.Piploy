@@ -56,7 +56,7 @@ public class GitTests(ITestOutputHelper output) : TestBase(output)
     public void RemoteHasChanges_WhenEnsureCalled_LocalIsMovedForward()
     {
         const string TestTag = "a6070008-cc23-453a-a93d-b28c4cc73e78";
-        using var context = SetupTest();
+        using var context = SetupTest(preserveTestDirectory: true);
         context.FakeRemote.CreateWithDockerfiles();
         var app = context.App1Application;
         context.Git.EnsureLocalRepository(app);

@@ -1,28 +1,16 @@
-﻿using Docker.DotNet;
-using Docker.DotNet.Models;
-using Irudd.Piploy.App;
+﻿using Irudd.Piploy.App;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using System.CommandLine;
 using System.CommandLine.Invocation;
 
 using CancellationTokenSource tokenSource = new CancellationTokenSource();
 
-Task Status(InvocationContext context)
+async Task Status(InvocationContext context)
 {
     var host = HostBuilder.CreateConfigOnlyHost(args);
-    var settings = host.Services.GetRequiredService<IOptions<PiploySettings>>().Value;
-
-    Console.WriteLine($"Host root: {settings.RootDirectory}");
-
-    foreach(var application in settings.Applications)
-    {
-        Console.WriteLine();
-        Console.WriteLine($"Application: {application.GitRepositoryUrl}");
-        Console.WriteLine("Status: Ok");
-    }
-
-    return Task.CompletedTask;
+    var service = host.Services.GetRequiredService<PiployService>();
+    var statusText = await service.GetStatusText(tokenSource.Token);
+    Console.WriteLine(statusText);
 }
 
 async Task Service(InvocationContext context)
@@ -45,25 +33,8 @@ async Task WipeAll(InvocationContext context)
     await service.WipeAll(tokenSource.Token);
 }
 
-async Task Test(InvocationContext context)
-{
-    //https://github.com/dotnet/Docker.DotNet
-    DockerClient client = new DockerClientConfiguration()
-         .CreateClient();
-
-    IList<ContainerListResponse> containers = await client.Containers.ListContainersAsync(
-        new ContainersListParameters()
-        {
-            Limit = 10,
-        });
-    foreach(var container in containers)
-    {
-        Console.WriteLine(container.Command);
-    }
-}
-
 var rootCommand = new RootCommand("piploy raspberry pi + git + docker host");
-rootCommand.SetHandler(Test);
+rootCommand.SetHandler(Status);
 
 void AddCommand(string name, string description, Func<InvocationContext, Task> handle)
 {
@@ -76,6 +47,5 @@ AddCommand("status", "Service status", Status);
 AddCommand("service", "Run as service", Service);
 AddCommand("poll", "Poll for changes now", Poll);
 AddCommand("wipeall", "Wipes out all local repos, docker images and containers", WipeAll);
-AddCommand("test", "Temp test", Test);
 
 await rootCommand.InvokeAsync(args);

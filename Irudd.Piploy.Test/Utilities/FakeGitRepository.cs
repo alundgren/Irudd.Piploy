@@ -65,7 +65,7 @@ ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);
         var app2Directory = AddDockerDirectory("app2");
 
         var commit = CommitChanges(repo, $"Added docker example");        
-        return (app1Directory, app2Directory, GitCommit.FromLibGit2SharpCommit(commit));
+        return (app1Directory, app2Directory, new GitCommit(commit));
     }
 
     public GitCommit UpdateIndexHtmlFile(string appName, string testTag = "Updated")
@@ -75,7 +75,7 @@ ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);
         var fullDirectory = Path.Combine(directory, appName);
         AddAndStageTextFile(repo, IndexFilename, GetIndexHtmlContent(appName, testTag), overrideDirectory: fullDirectory);
         var commit = CommitChanges(repo, $"Updated index.html for {appName}");
-        return GitCommit.FromLibGit2SharpCommit(commit);
+        return new GitCommit(commit);
     }
 
     private Commit CommitChanges(Repository repo, string comment)

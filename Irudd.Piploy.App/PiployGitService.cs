@@ -30,15 +30,12 @@ public class PiployGitService(IOptions<PiploySettings> settings, ILogger<PiployG
         {
             using var repo = new Repository(repoDirectory);
 
+            var (localBranch, remoteBranchRef, remote) = GetBranches(repo);
+
             //git fetch origin
             logger.LogInformation("Local exists. Fetching origin");
 
-            var remote = repo.Network.Remotes[repo.Head.RemoteName];
-            var refSpecs = remote.FetchRefSpecs.Select(x => x.Specification);
-            Commands.Fetch(repo, remote.Name, refSpecs, new FetchOptions { }, "");
-            
-            var remoteBranchRef = repo.Branches[$"{repo.Head.RemoteName}/{repo.Head.FriendlyName}"];
-            if (remoteBranchRef.Tip != repo.Head.Tip)
+            if (remoteBranchRef.Tip != localBranch.Tip)
             {
                 //git reset --hard origin/<branch>
                 logger.LogInformation($"Latest remote {remoteBranchRef} {remoteBranchRef.Tip.Sha} is ahead of local. Resetting local to match");
@@ -57,9 +54,32 @@ public class PiployGitService(IOptions<PiploySettings> settings, ILogger<PiployG
         }
     }
 
+    private (Branch LocalBranch, Branch RemoteBranchRef, Remote Remote) GetBranches(Repository repo)
+    {
+        var remote = repo.Network.Remotes[repo.Head.RemoteName];
+
+        var refSpecs = remote.FetchRefSpecs.Select(x => x.Specification);
+        Commands.Fetch(repo, remote.Name, refSpecs, new FetchOptions { }, "");
+
+        return (repo.Head, repo.Branches[$"{repo.Head.RemoteName}/{repo.Head.FriendlyName}"], remote);
+    }        
+
     public GitCommit GetLatestCommit(PiploySettings.Application application)
     {
         using var repo = new Repository(application.GetRepoDirectory(Settings));
-        return GitCommit.FromLibGit2SharpCommit(repo.Head.Tip);
+        return new GitCommit(repo.Head.Tip);
+    }
+
+    public (GitCommit LatestLocal, GitCommit LatestRemote)? GetCommitStatus(PiploySettings.Application application)
+    {
+        var repoDirectory = application.GetRepoDirectory(Settings);
+        if (!Directory.Exists(Path.Combine(repoDirectory, ".git")))
+            return null;
+
+        using var repo = new Repository(application.GetRepoDirectory(Settings));
+
+        var (localBranch, remoteBranchRef, _) = GetBranches(repo);
+
+        return (new GitCommit(localBranch.Tip), new GitCommit(remoteBranchRef.Tip));
     }
 }

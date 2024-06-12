@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text;
 
 namespace Irudd.Piploy.App;
 
@@ -30,6 +31,45 @@ public class PiployService(PiployDockerService docker, PiployGitService git, IOp
         using var _ = logger.BeginPiployOperationScope("wipeall");
         await docker.Cleanup.CleanupAll(cancellationToken);
         DeleteRootDirectory();
+    }
+
+    public async Task<string> GetStatusText(CancellationToken cancellationToken)
+    {
+        var text = new StringBuilder();
+
+        string GetCommitText(GitCommit? c) => c == null ? "Not cloned" : $"{c.Hash}: {c.Date:o}{Environment.NewLine}{c.Message}";
+
+        foreach (var application in settings.Value.Applications)
+        {
+            text.AppendLine($"------- Application: {application.Name} -------");
+            
+            var commitStatus = git.GetCommitStatus(application);
+            var dockerStatus = await docker.GetDockerStatus(application, cancellationToken);
+            var isRunningTheLatestVersion = commitStatus.HasValue
+                && dockerStatus.RunningContainerHash != null
+                && commitStatus.Value.LatestRemote.Hash == dockerStatus.RunningContainerHash;
+
+            text.AppendLine("Is running the latest version:");
+            text.AppendLine(isRunningTheLatestVersion ? "Yes" : "No");
+            text.AppendLine();
+
+            text.AppendLine("Latest local commit:");
+            text.AppendLine(GetCommitText(commitStatus?.LatestLocal));
+            text.AppendLine();
+
+            text.AppendLine("Latest remote commit:");
+            text.AppendLine(GetCommitText(commitStatus?.LatestRemote));
+            text.AppendLine();
+
+            text.AppendLine("Latest image commit hash: ");
+            text.AppendLine($"{dockerStatus.LatestImageHash ?? "-"}");
+            text.AppendLine();
+
+            text.AppendLine("Running container commit hash: ");
+            text.AppendLine($"{dockerStatus.RunningContainerHash?? "-"}");
+            text.AppendLine();
+        }
+        return text.ToString();
     }
 
     private void DeleteRootDirectory()

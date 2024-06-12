@@ -30,6 +30,7 @@ public abstract class TestBase(ITestOutputHelper output)
                 .AddSingleton<PiployGitService>()
                 .AddSingleton<PiployDockerService>()
                 .AddSingleton<PiployDockerCleanupService>()
+                .AddSingleton<PiployService>()
                 .AddLogging(x =>
                 {
                     x.AddPiployRotatingFileLogger();
@@ -39,6 +40,7 @@ public abstract class TestBase(ITestOutputHelper output)
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             Git = serviceProvider.GetRequiredService<PiployGitService>();
             Docker = serviceProvider.GetRequiredService<PiployDockerService>();
+            Piploy = serviceProvider.GetRequiredService<PiployService>();
             this.fakeRemote = fakeRemote;
             this.settings = settings;
             this.output = output;
@@ -49,6 +51,7 @@ public abstract class TestBase(ITestOutputHelper output)
 
         public PiployGitService Git { get; }
         public PiployDockerService Docker { get; }
+        public PiployService Piploy { get; }
         public FakeGitRepository FakeRemote => fakeRemote;
         public PiploySettings Settings => settings;
 

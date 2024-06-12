@@ -1,8 +1,20 @@
 ﻿namespace Irudd.Piploy.App;
 
-public class GitCommit(string value)
+public class GitCommit
 {
-    public string Value => value;
-
-    public static GitCommit FromLibGit2SharpCommit(LibGit2Sharp.Commit commit) => new GitCommit(commit.Sha);
+    public GitCommit(LibGit2Sharp.Commit source)
+    {
+        /*
+         * Beware:
+         * Dont refactor this to read from source in the getters.
+         * At least Commiter.When will cause a memory corruption error from libgit2
+         * if the Repository is disposed when reading from source.
+         */ 
+        Hash = source.Sha;
+        Date = source.Committer.When;
+        Message = source.Message.TrimEnd();
+    }
+    public string Hash { get; }
+    public DateTimeOffset Date { get; }
+    public string Message { get; }
 }
