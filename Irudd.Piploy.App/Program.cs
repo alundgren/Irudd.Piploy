@@ -1,5 +1,6 @@
 ﻿using Irudd.Piploy.App;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using System.CommandLine;
 using System.CommandLine.Invocation;
 
@@ -7,28 +8,41 @@ using CancellationTokenSource tokenSource = new CancellationTokenSource();
 
 async Task Status(InvocationContext context)
 {
-    var host = HostBuilder.CreateConfigOnlyHost(args);
+    var host = PiployHostBuilder.CreateConfigOnlyHost(args);
     var service = host.Services.GetRequiredService<PiployService>();
     var statusText = await service.GetStatusText(tokenSource.Token);
     Console.WriteLine(statusText);
 }
 
-async Task Service(InvocationContext context)
+async Task StartService(InvocationContext context)
 {
-    var host = HostBuilder.CreateServiceHost(args);
-    await host.StartAsync(tokenSource.Token);
+    var host = PiployHostBuilder.CreateServiceHost(args);
+    await host.RunAsync();
+}
+
+async Task StopService(InvocationContext context)
+{
+    await PiployBackgroundService.SendCommand("stop", tokenSource.Token);
 }
 
 async Task Poll(InvocationContext context)
-{
-    var host = HostBuilder.CreateConfigOnlyHost(args);
-    var service = host.Services.GetRequiredService<PiployService>();
-    await service.Poll(tokenSource.Token);
+{    
+    if(await PiployBackgroundService.IsBackgroundServiceRunning(tokenSource.Token))
+    {
+        Console.WriteLine("Background service running. Sending the poll command there");
+        await PiployBackgroundService.SendCommand("poll", tokenSource.Token);
+    }
+    else
+    {
+        var host = PiployHostBuilder.CreateConfigOnlyHost(args);
+        var service = host.Services.GetRequiredService<PiployService>();
+        await service.Poll(tokenSource.Token);
+    }
 }
 
 async Task WipeAll(InvocationContext context)
 {
-    var host = HostBuilder.CreateConfigOnlyHost(args);
+    var host = PiployHostBuilder.CreateConfigOnlyHost(args);
     var service = host.Services.GetRequiredService<PiployService>();
     await service.WipeAll(tokenSource.Token);
 }
@@ -44,7 +58,8 @@ void AddCommand(string name, string description, Func<InvocationContext, Task> h
 }
 
 AddCommand("status", "Service status", Status);
-AddCommand("service", "Run as service", Service);
+AddCommand("service-start", "Run as service", StartService);
+AddCommand("service-stop", "Run as service", StopService);
 AddCommand("poll", "Poll for changes now", Poll);
 AddCommand("wipeall", "Wipes out all local repos, docker images and containers", WipeAll);
 

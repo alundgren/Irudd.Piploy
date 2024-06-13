@@ -39,6 +39,11 @@ public class PiployService(PiployDockerService docker, PiployGitService git, IOp
 
         string GetCommitText(GitCommit? c) => c == null ? "Not cloned" : $"{c.Hash}: {c.Date:o}{Environment.NewLine}{c.Message}";
 
+        text.AppendLine($"------- Piploy status -------");
+        var isBackgroundServiceRunning = await PiployBackgroundService.IsBackgroundServiceRunning(cancellationToken);
+        text.AppendLine($"Background service running: {(isBackgroundServiceRunning ? "Yes" : "No")}");
+        text.AppendLine();
+
         foreach (var application in settings.Value.Applications)
         {
             text.AppendLine($"------- Application: {application.Name} -------");

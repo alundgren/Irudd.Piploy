@@ -9,6 +9,12 @@ public class PiploySettings
     [Required]
     public string RootDirectory { get; set; } = null!;
 
+    /// <summary>
+    /// By default when running as a service we check for new versions of the apps
+    /// every 60 minutes. Use this to changes that value.
+    /// </summary>
+    public int? MinutesBetweenBackgroundPolls { get; set; }
+
     [Required]
     [ValidateEnumeratedItems]
     public List<Application> Applications { get; set; } = null!;

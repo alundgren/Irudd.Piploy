@@ -10,13 +10,13 @@ using System.Threading.Tasks;
 
 namespace Irudd.Piploy.App;
 
-internal class HostBuilder
+internal class PiployHostBuilder
 {
     public static IHost CreateServiceHost(string[] args) =>    
         CreateBuilderWithConfigOnly(args)
         .ConfigureServices((hostContext, services) =>
         {
-            services.AddHostedService<DeploymentBackgroundService>();
+            services.AddHostedService<PiployBackgroundService>();
         })
         .Build();
 
@@ -25,6 +25,7 @@ internal class HostBuilder
     private static IHostBuilder CreateBuilderWithConfigOnly(string[] args) => Host
         .CreateDefaultBuilder(args)
         .ConfigureAppConfiguration(x => x.AddJsonFile("piploy.json"))
+        .UseConsoleLifetime()
         .ConfigureServices((context, services) =>
         {
             services.AddOptions<PiploySettings>()
