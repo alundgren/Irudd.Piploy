@@ -41,6 +41,7 @@ public class PiployService(PiployDockerService docker, PiployGitService git, IOp
 
         text.AppendLine($"------- Piploy status -------");
         var isBackgroundServiceRunning = await PiployBackgroundService.IsBackgroundServiceRunning(cancellationToken);
+        text.AppendLine($"Version: {typeof(Program).Assembly.GetName().Version}");
         text.AppendLine($"Background service running: {(isBackgroundServiceRunning ? "Yes" : "No")}");
         text.AppendLine();
 

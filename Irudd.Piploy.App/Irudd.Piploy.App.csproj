@@ -9,7 +9,16 @@
 	<InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
-  <ItemGroup>
+  <PropertyGroup>
+	<VersionPrefix>$([System.DateTimeOffset]::UtcNow.ToString('yyyy.MM.dd'))</VersionPrefix>
+	<VersionSuffix>1$([System.DateTimeOffset]::UtcNow.ToString('HHmm'))</VersionSuffix>
+    <Version Condition=" '$(VersionSuffix)' != '' ">$(VersionPrefix).$(VersionSuffix)</Version>
+    <Version Condition=" '$(VersionSuffix)' == '' ">$(VersionPrefix)</Version> 
+	<GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
+	<Deterministic>false</Deterministic>
+  </PropertyGroup>
+
+	<ItemGroup>
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="LibGit2Sharp" Version="0.30.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
