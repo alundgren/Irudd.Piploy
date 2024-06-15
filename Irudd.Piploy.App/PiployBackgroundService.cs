@@ -10,6 +10,8 @@ public class PiployBackgroundService(ILogger<PiployBackgroundService> logger, IH
     PiployService piploy, IOptions<PiploySettings> settings) : BackgroundService
 {
     private const string CommandPipeName = "piploy_pipe";
+    public const string ConnectionTestCommand = "donothing";
+
     private CancellationTokenSource? cancellationSource;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
@@ -46,7 +48,7 @@ public class PiployBackgroundService(ILogger<PiployBackgroundService> logger, IH
             {
                 application.StopApplication();
             }
-            else if(command == "donothing")
+            else if(command == ConnectionTestCommand)
             {
                 //Connection test from IsBackgroundServiceRunning
             }
@@ -82,7 +84,7 @@ public class PiployBackgroundService(ILogger<PiployBackgroundService> logger, IH
                 using var commandReader = new StreamReader(commandServer, leaveOpen: true);
                 var command = await commandReader.ReadLineAsync();
                 commandServer.Disconnect();
-                if (command != null)
+                if (command != null && command != ConnectionTestCommand)
                 {
                     logger.LogInformation($"Received command: {command}");
                     if (!commands.TryAdd(command, 0, cancellationToken))
@@ -129,7 +131,7 @@ public class PiployBackgroundService(ILogger<PiployBackgroundService> logger, IH
     {
         try
         {
-            await SendCommand("donothing", cancellationToken);
+            await SendCommand(ConnectionTestCommand, cancellationToken);
             return true;
         }
         catch(TimeoutException)
