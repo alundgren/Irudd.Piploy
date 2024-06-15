@@ -158,9 +158,10 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
             return (true, wasStarted, response.ID);
         }
         catch(DockerApiException ex)
-        {
+        {            
             if (ex.Message.Contains("port is already allocated"))
-                throw new Exception("Port is already allocated"); //TODO: Can we figure out by what?
+                throw PiployException.CreatePortAlreadyInUse(portMappings?.Select(x => x.HostPort));
+
             throw;
         }
     }
