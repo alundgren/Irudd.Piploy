@@ -66,20 +66,19 @@ process deliberately after inspecting it.
 
 ## Run while this laptop is on
 
-The supplied plist polls every ten minutes. It contains this machine's current
-repository path; update the three `/Users/alun/...` paths if the repository is
-moved.
+`launchd` requires absolute paths, so the worker generates its local plist at
+installation time. The checked-in files contain no user or repository path;
+the generated plist uses the current checkout path and is stored under your
+`~/Library/LaunchAgents` directory.
 
 ```bash
-mkdir -p .codex-issue-worker
-cp scripts/com.alundgren.irudd-piploy.codex-issue-worker.plist ~/Library/LaunchAgents/
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.alundgren.irudd-piploy.codex-issue-worker.plist
+scripts/codex-issue-worker install-launchd
 ```
 
 Unload the job to stop polling completely:
 
 ```bash
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.alundgren.irudd-piploy.codex-issue-worker.plist
+scripts/codex-issue-worker uninstall-launchd
 ```
 
 Prefer `disable` as the normal kill switch, since the worker verifies it before

@@ -14,6 +14,7 @@ readonly USAGE_FILE="$STATE_DIR/token-usage.tsv"
 readonly BUDGET_APPROVAL_DIR="$STATE_DIR/budget-approvals"
 readonly WORKTREE_BASE_DIR="$STATE_DIR/worktree-bases"
 readonly EXAMPLE_CONFIG="$SCRIPT_DIR/codex-issue-worker.config.example"
+readonly LAUNCHD_LABEL="com.alundgren.irudd-piploy.codex-issue-worker"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,8 @@ Commands:
   approve-budget <issue>  Authorize exactly one further Codex run for a held issue.
   continue <issue>        Use that one-time approval to continue a held issue.
   release <issue-number> Release a closed issue so another issue may be claimed.
+  install-launchd         Generate and load a laptop-local 10-minute launchd job.
+  uninstall-launchd       Unload and remove the generated launchd job.
 
 The worker only acts on open issues with both `ready-for-agent` and
 `codex:implement`. It keeps `codex:claimed` on the active issue, so it cannot
@@ -126,6 +129,19 @@ budget_approval_file() {
   echo "$BUDGET_APPROVAL_DIR/$1"
 }
 
+launchd_plist() {
+  echo "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+}
+
+xml_escape() {
+  sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
 record_token_usage() {
   local issue_number="$1"
   local run_log="$2"
@@ -170,6 +186,13 @@ status() {
   fi
   echo "token budget: $TOKEN_BUDGET"
   echo "pre-turn guard: $PRETURN_TOKEN_GUARD"
+  local plist
+  plist="$(launchd_plist)"
+  if [ -f "$plist" ]; then
+    echo "launchd job: installed ($plist)"
+  else
+    echo "launchd job: not installed"
+  fi
 
   local active_issue
   active_issue="$(claimed_issue)"
@@ -179,6 +202,67 @@ status() {
   else
     echo "claimed issue: none"
   fi
+}
+
+install_launchd() {
+  require_initialized
+  require_command launchctl
+  require_command plutil
+
+  local plist temporary domain program_path output_path error_path
+  plist="$(launchd_plist)"
+  domain="gui/$(id -u)"
+  program_path="$REPO_ROOT/scripts/codex-issue-worker"
+  output_path="$STATE_DIR/launchd.out.log"
+  error_path="$STATE_DIR/launchd.err.log"
+  temporary="$(mktemp "$STATE_DIR/$LAUNCHD_LABEL.XXXXXX")"
+
+  {
+    cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LAUNCHD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(printf '%s' "$program_path" | xml_escape)</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$(printf '%s' "$REPO_ROOT" | xml_escape)</string>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>$(printf '%s' "$output_path" | xml_escape)</string>
+  <key>StandardErrorPath</key>
+  <string>$(printf '%s' "$error_path" | xml_escape)</string>
+</dict>
+</plist>
+EOF
+  } >"$temporary"
+
+  plutil -lint "$temporary" >/dev/null
+  mkdir -p "$(dirname "$plist")"
+  launchctl bootout "$domain/$LAUNCHD_LABEL" 2>/dev/null || true
+  mv "$temporary" "$plist"
+  launchctl bootstrap "$domain" "$plist"
+  echo "Installed and loaded $plist"
+}
+
+uninstall_launchd() {
+  require_initialized
+  require_command launchctl
+
+  local plist domain
+  plist="$(launchd_plist)"
+  domain="gui/$(id -u)"
+  launchctl bootout "$domain/$LAUNCHD_LABEL" 2>/dev/null || true
+  rm -f "$plist"
+  echo "Unloaded and removed $plist"
 }
 
 release() {
@@ -476,6 +560,14 @@ main() {
     release)
       shift
       release "$@"
+      ;;
+    install-launchd)
+      [ "$#" -eq 1 ] || die "install-launchd takes no arguments"
+      install_launchd
+      ;;
+    uninstall-launchd)
+      [ "$#" -eq 1 ] || die "uninstall-launchd takes no arguments"
+      uninstall_launchd
       ;;
     -h|--help|help|"")
       usage
