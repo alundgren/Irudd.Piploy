@@ -63,6 +63,9 @@ require_initialized() {
   : "${PRETURN_TOKEN_GUARD:?missing PRETURN_TOKEN_GUARD in $CONFIG_FILE}"
   : "${VERIFY_COMMAND:?missing VERIFY_COMMAND in $CONFIG_FILE}"
   : "${AUTO_CREATE_PR:?missing AUTO_CREATE_PR in $CONFIG_FILE}"
+  : "${MAX_VERIFICATION_REPAIR_RUNS:=1}"
+
+  [[ "$MAX_VERIFICATION_REPAIR_RUNS" =~ ^[0-9]+$ ]] || die "MAX_VERIFICATION_REPAIR_RUNS must be a non-negative integer"
 }
 
 init() {
@@ -186,6 +189,7 @@ status() {
   fi
   echo "token budget: $TOKEN_BUDGET"
   echo "pre-turn guard: $PRETURN_TOKEN_GUARD"
+  echo "automatic verification repairs: $MAX_VERIFICATION_REPAIR_RUNS"
   local plist
   plist="$(launchd_plist)"
   if [ -f "$plist" ]; then
@@ -323,6 +327,7 @@ create_worktree() {
 run_codex() {
   local issue_number="$1"
   local worktree="$2"
+  local verification_log="${3:-}"
   local issue_file="$worktree/.codex-issue-worker/issue-$issue_number.md"
   local run_log="$STATE_DIR/runs/issue-$issue_number-$(date -u +%Y%m%dT%H%M%SZ).jsonl"
   local final_message="$run_log.final.md"
@@ -347,6 +352,14 @@ controller to inspect. In your final response, state the files changed and the
 verification result.
 EOF
 
+  if [ -n "$verification_log" ]; then
+    prompt+="
+
+A previous controller verification failed. Its exact, trusted output is stored
+at $verification_log. Diagnose and fix that failure without weakening or
+skipping repository checks, then rerun the required verification."
+  fi
+
   local -a codex_args
   codex_args=(exec --json --sandbox workspace-write --ignore-user-config --output-last-message "$final_message" -C "$worktree")
   if [ -n "${CODEX_MODEL:-}" ]; then
@@ -364,6 +377,7 @@ EOF
 verify_and_maybe_open_pr() {
   local issue_number="$1"
   local worktree="$2"
+  local verification_log="$3"
   local base_file="$WORKTREE_BASE_DIR/issue-$issue_number"
   [ -f "$base_file" ] || die "missing recorded base revision for #$issue_number"
   local base_revision current_revision controller_changes
@@ -383,10 +397,11 @@ verify_and_maybe_open_pr() {
   fi
 
   echo "Running verification: $VERIFY_COMMAND"
-  if ! (cd "$worktree" && eval "$VERIFY_COMMAND"); then
-    add_label "$issue_number" "$REVIEW_LABEL"
-    comment "$issue_number" "Codex made changes, but controller verification failed. Review the worktree at \`$worktree\`."
-    return 1
+  if (cd "$worktree" && eval "$VERIFY_COMMAND") >"$verification_log" 2>&1; then
+    cat "$verification_log"
+  else
+    cat "$verification_log"
+    return 2
   fi
 
   if git -C "$worktree" diff --quiet && [ -z "$(git -C "$worktree" ls-files --others --exclude-standard)" ]; then
@@ -411,6 +426,61 @@ verify_and_maybe_open_pr() {
   comment "$issue_number" "Codex implementation is ready for human review: $pr_url"
 }
 
+run_and_verify() {
+  local issue_number="$1"
+  local worktree="$2"
+  local prior_tokens="$3"
+  local max_repair_runs="${4:-$MAX_VERIFICATION_REPAIR_RUNS}"
+  local repair_runs=0
+  local verification_log=""
+
+  while true; do
+    local run_log run_tokens total_tokens verification_status
+    if ! run_log="$(run_codex "$issue_number" "$worktree" "$verification_log")"; then
+      add_label "$issue_number" "$REVIEW_LABEL"
+      comment "$issue_number" "Codex stopped with an error. Review the worktree at \`$worktree\` and its run records under \`.codex-issue-worker/runs\`."
+      return 1
+    fi
+
+    run_tokens="$(record_token_usage "$issue_number" "$run_log")"
+    total_tokens="$((prior_tokens + run_tokens))"
+    prior_tokens="$total_tokens"
+    echo "Codex recorded $run_tokens tokens; issue total is $total_tokens."
+
+    if [ "$total_tokens" -ge "$TOKEN_BUDGET" ]; then
+      add_label "$issue_number" "$BUDGET_REVIEW_LABEL"
+      comment "$issue_number" "Codex recorded $total_tokens tokens, meeting or exceeding the $TOKEN_BUDGET-token budget. No PR was created; explicit human review is required."
+      return
+    fi
+
+    verification_log="$worktree/.codex-issue-worker/verification-$(basename "$run_log" .jsonl).log"
+    if verify_and_maybe_open_pr "$issue_number" "$worktree" "$verification_log"; then
+      return
+    else
+      verification_status="$?"
+    fi
+
+    if [ "$verification_status" -ne 2 ]; then
+      return "$verification_status"
+    fi
+
+    if [ "$repair_runs" -ge "$max_repair_runs" ]; then
+      add_label "$issue_number" "$REVIEW_LABEL"
+      comment "$issue_number" "Codex made changes, but controller verification failed after $repair_runs automatic repair run(s). Review the worktree at \`$worktree\` and the verification output at \`$verification_log\`."
+      return 1
+    fi
+
+    if [ "$total_tokens" -ge "$PRETURN_TOKEN_GUARD" ]; then
+      add_label "$issue_number" "$BUDGET_REVIEW_LABEL"
+      comment "$issue_number" "Controller verification failed, but Codex has recorded $total_tokens tokens, meeting the $PRETURN_TOKEN_GUARD-token pre-turn guard. No automatic repair run was started; explicit human review is required."
+      return
+    fi
+
+    repair_runs="$((repair_runs + 1))"
+    echo "Controller verification failed; starting automatic repair run $repair_runs of $max_repair_runs."
+  done
+}
+
 continue_issue() {
   require_initialized
   require_command git
@@ -432,25 +502,11 @@ continue_issue() {
   [ -d "$worktree" ] || die "worktree is missing: $worktree"
   rm -f "$approval_file"
 
-  local prior_tokens run_log run_tokens total_tokens
+  local prior_tokens
   prior_tokens="$(issue_token_total "$issue_number")"
-  if ! run_log="$(run_codex "$issue_number" "$worktree")"; then
-    add_label "$issue_number" "$REVIEW_LABEL"
-    comment "$issue_number" "The approved additional Codex run stopped with an error. Review the worktree at \`$worktree\`."
-    return 1
-  fi
-
-  run_tokens="$(record_token_usage "$issue_number" "$run_log")"
-  total_tokens="$((prior_tokens + run_tokens))"
-  echo "Codex recorded $run_tokens tokens; issue total is $total_tokens."
-
-  if [ "$total_tokens" -ge "$TOKEN_BUDGET" ]; then
-    add_label "$issue_number" "$BUDGET_REVIEW_LABEL"
-    comment "$issue_number" "The approved additional run brought recorded usage to $total_tokens tokens. No PR was created; approve another run or review the worktree manually."
-    return
-  fi
-
-  verify_and_maybe_open_pr "$issue_number" "$worktree"
+  # A budget approval promises exactly one further Codex run, so it cannot also
+  # authorize a controller-initiated repair run.
+  run_and_verify "$issue_number" "$worktree" "$prior_tokens" 0
 }
 
 run() {
@@ -501,25 +557,7 @@ run() {
 
   local worktree
   worktree="$(create_worktree "$issue_number")"
-  local run_log
-  if ! run_log="$(run_codex "$issue_number" "$worktree")"; then
-    add_label "$issue_number" "$REVIEW_LABEL"
-    comment "$issue_number" "Codex stopped with an error. Review the worktree at \`$worktree\` and its run records under \`.codex-issue-worker/runs\`."
-    return 1
-  fi
-
-  local run_tokens total_tokens
-  run_tokens="$(record_token_usage "$issue_number" "$run_log")"
-  total_tokens="$((prior_tokens + run_tokens))"
-  echo "Codex recorded $run_tokens tokens; issue total is $total_tokens."
-
-  if [ "$total_tokens" -ge "$TOKEN_BUDGET" ]; then
-    add_label "$issue_number" "$BUDGET_REVIEW_LABEL"
-    comment "$issue_number" "Codex recorded $total_tokens tokens, meeting or exceeding the $TOKEN_BUDGET-token budget. No PR was created; explicit human review is required."
-    return
-  fi
-
-  verify_and_maybe_open_pr "$issue_number" "$worktree"
+  run_and_verify "$issue_number" "$worktree" "$prior_tokens"
 }
 
 main() {
