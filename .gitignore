@@ -364,3 +364,5 @@ FodyWeavers.xsd
 
 /Irudd.Piploy.App/piploy.json
 /Temp
+dist/
+.pnpm-store/
