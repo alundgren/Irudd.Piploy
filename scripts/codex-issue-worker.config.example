@@ -26,10 +26,5 @@ VERIFY_COMMAND="pnpm lint && pnpm test"
 # still stop a repair run that would require explicit human approval.
 MAX_VERIFICATION_REPAIR_RUNS=1
 
-# Leave false for the initial rollout. If changed to true, a successfully
-# verified run commits its worktree, pushes codex/issue-<n>, and creates a PR.
-# The worker never merges the PR and still blocks on this issue until release.
-AUTO_CREATE_PR=false
-
 # Optional. Empty means use your local Codex default.
 CODEX_MODEL=""
