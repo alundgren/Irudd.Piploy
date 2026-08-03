@@ -22,8 +22,10 @@ job is loaded. It is **disabled by default**.
   `MAX_VERIFICATION_REPAIR_RUNS`, default `1`), then re-runs the checks. The
   usual token guard applies before an automatic repair starts. A
   budget-approved `continue` remains exactly one Codex run and does not add a
-  repair attempt. A PR is opt-in and still requires human review. The worker
-  never merges.
+  repair attempt. A successfully verified implementation with repository
+  changes is committed, pushed, and opened as a PR before the worker applies
+  `codex:needs-review`; it still requires human review and the worker never
+  merges.
 - It records token totals from Codex's JSON completion events. It will not make
   a follow-up run after the pre-turn guard, and it will not automatically create
   a PR after the total meets the budget. These are cumulative-usage circuit
@@ -55,7 +57,7 @@ Run from the repository root:
 ```bash
 chmod +x scripts/codex-issue-worker
 scripts/codex-issue-worker init
-# Review .codex-issue-worker/config.sh. Keep AUTO_CREATE_PR=false initially.
+# Review .codex-issue-worker/config.sh.
 scripts/codex-issue-worker bootstrap-labels
 scripts/codex-issue-worker enable
 scripts/codex-issue-worker run --dry-run

@@ -65,7 +65,6 @@ require_initialized() {
   : "${TOKEN_BUDGET:?missing TOKEN_BUDGET in $CONFIG_FILE}"
   : "${PRETURN_TOKEN_GUARD:?missing PRETURN_TOKEN_GUARD in $CONFIG_FILE}"
   : "${VERIFY_COMMAND:?missing VERIFY_COMMAND in $CONFIG_FILE}"
-  : "${AUTO_CREATE_PR:?missing AUTO_CREATE_PR in $CONFIG_FILE}"
   : "${MAX_VERIFICATION_REPAIR_RUNS:=1}"
 
   [[ "$MAX_VERIFICATION_REPAIR_RUNS" =~ ^[0-9]+$ ]] || die "MAX_VERIFICATION_REPAIR_RUNS must be a non-negative integer"
@@ -442,7 +441,7 @@ skipping repository checks, then rerun the required verification."
   fi
 }
 
-verify_and_maybe_open_pr() {
+verify_and_open_pr() {
   local issue_number="$1"
   local worktree="$2"
   local verification_log="$3"
@@ -475,12 +474,6 @@ verify_and_maybe_open_pr() {
   if git -C "$worktree" diff --quiet && [ -z "$(git -C "$worktree" ls-files --others --exclude-standard)" ]; then
     add_label "$issue_number" "$REVIEW_LABEL"
     comment "$issue_number" "Codex completed without a repository change. Review its final message and worktree at \`$worktree\`."
-    return 0
-  fi
-
-  if [ "$AUTO_CREATE_PR" != "true" ]; then
-    add_label "$issue_number" "$REVIEW_LABEL"
-    comment "$issue_number" "Codex completed and verification passed. Automatic PR creation is disabled; review the worktree at \`$worktree\`."
     return 0
   fi
 
@@ -522,7 +515,7 @@ run_and_verify() {
     fi
 
     verification_log="$worktree/.codex-issue-worker/verification-$(basename "$run_log" .jsonl).log"
-    if verify_and_maybe_open_pr "$issue_number" "$worktree" "$verification_log"; then
+    if verify_and_open_pr "$issue_number" "$worktree" "$verification_log"; then
       return
     else
       verification_status="$?"
