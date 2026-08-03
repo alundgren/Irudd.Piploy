@@ -15,8 +15,13 @@ job is loaded. It is **disabled by default**.
   or changes the controller's own files.
 - Work happens in `.codex-issue-worker/worktrees/issue-<n>`, not in the main
   checkout.
-- The configured checks run after Codex returns. A PR is opt-in and still
-  requires human review. The worker never merges.
+- The configured checks run after Codex returns. If they fail, the controller
+  captures the output and may give Codex one bounded repair run (configured by
+  `MAX_VERIFICATION_REPAIR_RUNS`, default `1`), then re-runs the checks. The
+  usual token guard applies before an automatic repair starts. A
+  budget-approved `continue` remains exactly one Codex run and does not add a
+  repair attempt. A PR is opt-in and still requires human review. The worker
+  never merges.
 - It records token totals from Codex's JSON completion events. It will not make
   a follow-up run after the pre-turn guard, and it will not automatically create
   a PR after the total meets the budget. These are cumulative-usage circuit
