@@ -14,7 +14,9 @@ job is loaded. It is **disabled by default**.
   close, or merge anything. The controller rejects a run that makes a commit
   or changes the controller's own files.
 - Work happens in `.codex-issue-worker/worktrees/issue-<n>`, not in the main
-  checkout.
+  checkout. Before the worker claims a new issue, it fetches `origin/main` and
+  creates that worktree from the refreshed remote ref. Continuing a held issue
+  reuses its existing worktree.
 - The configured checks run after Codex returns. If they fail, the controller
   captures the output and may give Codex one bounded repair run (configured by
   `MAX_VERIFICATION_REPAIR_RUNS`, default `1`), then re-runs the checks. The
