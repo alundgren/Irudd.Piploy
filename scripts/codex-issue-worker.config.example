@@ -10,11 +10,12 @@ CLAIMED_LABEL="codex:claimed"
 REVIEW_LABEL="codex:needs-review"
 BUDGET_REVIEW_LABEL="codex:budget-review"
 
-# Codex reports usage only after a turn ends. The pre-turn guard prevents a
-# follow-up run once this issue has accumulated 170k tokens. The 200k budget
-# prevents automatic verification/PR creation after a run crosses the limit.
-PRETURN_TOKEN_GUARD=170000
-TOKEN_BUDGET=200000
+# Cumulative-usage circuit breaker only. This does not compact or otherwise
+# constrain Codex's context window. Codex reports usage after a turn ends, so
+# the 2m guard prevents a follow-up run and the 2.5m threshold requires review
+# before the worker verifies or opens a PR after a costly run.
+PRETURN_TOKEN_GUARD=2000000
+TOKEN_BUDGET=2500000
 
 # Required by this repository's CLAUDE.md. Keep this an explicit, trusted local
 # command; this configuration file is not read from an issue.

@@ -19,12 +19,15 @@ job is loaded. It is **disabled by default**.
   requires human review. The worker never merges.
 - It records token totals from Codex's JSON completion events. It will not make
   a follow-up run after the pre-turn guard, and it will not automatically create
-  a PR after the total meets the budget.
+  a PR after the total meets the budget. These are cumulative-usage circuit
+  breakers, not context-window limits, and the worker never enables or requests
+  context compaction.
 
 The final point is an operational guard, not a hard mid-turn cutoff: Codex
 reports token usage when a turn completes. A single run can therefore cross the
 budget before the controller can stop it. Keep the pre-turn threshold below the
-budget and begin with small, tightly scoped issues.
+budget and begin with small, tightly scoped issues. The default guard is 2m
+tokens and the default budget-review threshold is 2.5m tokens per issue.
 
 When the guard stops a held issue, inspect the worktree and recorded usage. To
 authorize exactly one additional Codex run, use:
