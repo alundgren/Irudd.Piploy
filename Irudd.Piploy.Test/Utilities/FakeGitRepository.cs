@@ -34,7 +34,7 @@ public class FakeGitRepository(string directory)
             var fullDirectory = Path.Combine(directory, directoryName);
             Directory.CreateDirectory(fullDirectory);
 
-            AddAndStageTextFile(repo, "Dockerfile", @"FROM nginx:mainline-alpine
+            AddAndStageTextFile(repo, "Dockerfile", @"FROM nginx:mainline-alpine@sha256:5a88c9c45479443d7be2eadc894b4ed0a9801bae03d97a5760ae13b5c2005942
 RUN rm /etc/nginx/conf.d/*
 ADD hello.conf /etc/nginx/conf.d/
 ADD index.html /usr/share/nginx/html/", overrideDirectory: fullDirectory);

@@ -44,8 +44,7 @@ public class PiploySettings
         //  Example with custom name of the file
         //  "api/DockerApiFile" or "/DockerApiFile"
         /// </summary>
-        [Required]
-        public string DockerfilePath { get; set; } = null!;
+        public string? DockerfilePath { get; set; }
 
         /// <summary>
         /// Same format as docker run -p <hostport>:<containerport>
@@ -90,4 +89,3 @@ public class PiploySettings
         }
     }
 }
-

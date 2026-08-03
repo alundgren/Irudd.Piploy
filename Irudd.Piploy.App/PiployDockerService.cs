@@ -24,7 +24,15 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
 
     public async Task<(bool WasCreated, string ImageId)> EnsureImageExists(PiploySettings.Application application, GitCommit commit, CancellationToken cancellationToken)
     {
-        
+        var (repoRelativeDockerContextDirectory, dockerfilename) = GetDockerfilePathFromSetting(application.DockerfilePath);
+        var absoluteRepoDirectory = application.GetRepoDirectory(Settings);
+        var absoluteDockerContextDirectory = Path.Combine(absoluteRepoDirectory, repoRelativeDockerContextDirectory);
+        var absoluteDockerfilePath = Path.Combine(absoluteDockerContextDirectory, dockerfilename);
+        if (!File.Exists(absoluteDockerfilePath))
+            throw new Exception($"Dockerfile '{application.DockerfilePath ?? "Dockerfile"}' does not exist. Expected location: '{absoluteDockerfilePath}'");
+
+        DockerfileImagePolicy.Validate(absoluteDockerfilePath);
+
         using var docker = new DockerClientConfiguration().CreateClient();
 
         var commitVersionTag = GetImageVersionTagCommit(application.Name, commit);
@@ -35,14 +43,6 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
             return (false, existingImage.ID);
 
         //TODO: Check if already correct version
-
-        var (repoRelativeDockerContextDirectory, dockerfilename) = GetDockerfilePathFromSetting(application.DockerfilePath);
-        var absoluteRepoDirectory = application.GetRepoDirectory(Settings);
-        var absoluteDockerContextDirectory = Path.Combine(absoluteRepoDirectory, repoRelativeDockerContextDirectory);
-
-        var absoluteDockerfilePath = Path.Combine(absoluteDockerContextDirectory, dockerfilename);
-        if (!File.Exists(absoluteDockerfilePath))
-            throw new Exception($"Dockerfile '{application.DockerfilePath} does not exist. Expected location: '{absoluteDockerfilePath}'");
 
         using var tarFile = new MemoryStream();
         await TarFile.CreateFromDirectoryAsync(absoluteDockerContextDirectory, tarFile, false, cancellationToken: cancellationToken);
@@ -208,8 +208,9 @@ public class PiployDockerService(IOptions<PiploySettings> settings, PiployDocker
     public static string TestMarkerLabelName => $"{Piploy}_isCreatedByTest";
     public static string ImageCommitLabelName => $"{Piploy}_gitTipCommit";
 
-    public static (string ContextDirectory, string Dockerfilename) GetDockerfilePathFromSetting(string dockerPathSetting)
+    public static (string ContextDirectory, string Dockerfilename) GetDockerfilePathFromSetting(string? dockerPathSetting)
     {
+        dockerPathSetting = string.IsNullOrWhiteSpace(dockerPathSetting) ? "Dockerfile" : dockerPathSetting;
         //Normalize to format <path>/<filename> where path is repeating segments like <name>/
         var d = dockerPathSetting.Replace(@"\", "/").Trim();
         d = d.StartsWith("/") ? d.Substring(1) : d;
