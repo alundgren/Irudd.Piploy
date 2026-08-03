@@ -1,0 +1,29 @@
+# This file is copied to .codex-issue-worker/config.sh by `init`. It is local,
+# ignored by Git, and is the deliberate control point for the worker.
+
+# An issue must have both of these labels before it can be picked up.
+ELIGIBLE_LABEL="codex:implement"
+READY_LABEL="ready-for-agent"
+
+# The worker writes and reads these labels to enforce one active issue at a time.
+CLAIMED_LABEL="codex:claimed"
+REVIEW_LABEL="codex:needs-review"
+BUDGET_REVIEW_LABEL="codex:budget-review"
+
+# Codex reports usage only after a turn ends. The pre-turn guard prevents a
+# follow-up run once this issue has accumulated 170k tokens. The 200k budget
+# prevents automatic verification/PR creation after a run crosses the limit.
+PRETURN_TOKEN_GUARD=170000
+TOKEN_BUDGET=200000
+
+# Required by this repository's CLAUDE.md. Keep this an explicit, trusted local
+# command; this configuration file is not read from an issue.
+VERIFY_COMMAND="pnpm lint && pnpm test"
+
+# Leave false for the initial rollout. If changed to true, a successfully
+# verified run commits its worktree, pushes codex/issue-<n>, and creates a PR.
+# The worker never merges the PR and still blocks on this issue until release.
+AUTO_CREATE_PR=false
+
+# Optional. Empty means use your local Codex default.
+CODEX_MODEL=""
