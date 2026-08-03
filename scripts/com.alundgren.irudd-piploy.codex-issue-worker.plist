@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.alundgren.irudd-piploy.codex-issue-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/alun/repos/Irudd.Piploy/scripts/codex-issue-worker</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/alun/repos/Irudd.Piploy</string>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/alun/repos/Irudd.Piploy/.codex-issue-worker/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/alun/repos/Irudd.Piploy/.codex-issue-worker/launchd.err.log</string>
+</dict>
+</plist>
