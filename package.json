@@ -1,0 +1,29 @@
+{
+  "name": "irudd-piploy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "tsc --noEmit && eslint . && prettier --check \"*.{js,ts,json}\" \"src/**/*.ts\" \"test/**/*.ts\"",
+    "test": "vitest --config vitest.unit.config.ts run",
+    "test:integration": "vitest --config vitest.integration.config.ts run",
+    "build": "tsup"
+  },
+  "dependencies": {
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vitest": "^4.0.8"
+  }
+}
