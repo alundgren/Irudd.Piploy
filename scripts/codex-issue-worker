@@ -309,6 +309,12 @@ claim_issue() {
   comment "$issue_number" "Claimed by the local Codex worker. It will create a reviewable change and will not merge it."
 }
 
+refresh_origin_main() {
+  echo "Refreshing origin/main."
+  git -C "$REPO_ROOT" fetch origin main
+  git -C "$REPO_ROOT" rev-parse --verify --quiet origin/main >/dev/null
+}
+
 create_worktree() {
   local issue_number="$1"
   local branch_name="codex/issue-$issue_number"
@@ -318,7 +324,7 @@ create_worktree() {
   git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$branch_name" && die "branch already exists: $branch_name"
 
   mkdir -p "$STATE_DIR/worktrees"
-  git -C "$REPO_ROOT" worktree add -b "$branch_name" "$worktree" HEAD >/dev/null
+  git -C "$REPO_ROOT" worktree add -b "$branch_name" "$worktree" origin/main >/dev/null
   mkdir -p "$WORKTREE_BASE_DIR"
   git -C "$worktree" rev-parse HEAD >"$WORKTREE_BASE_DIR/issue-$issue_number"
   echo "$worktree"
@@ -546,6 +552,7 @@ run() {
     return
   fi
 
+  refresh_origin_main
   claim_issue "$issue_number"
   local prior_tokens
   prior_tokens="$(issue_token_total "$issue_number")"
