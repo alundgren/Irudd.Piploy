@@ -11,10 +11,13 @@ readonly CONFIG_FILE="$STATE_DIR/config.sh"
 readonly ENABLED_FILE="$STATE_DIR/enabled"
 readonly LOCK_DIR="$STATE_DIR/run.lock"
 readonly USAGE_FILE="$STATE_DIR/token-usage.tsv"
+readonly LAST_RUN_FILE="$STATE_DIR/last-run.tsv"
+readonly LAST_RUN_ERROR_FILE="$STATE_DIR/last-run.err.log"
 readonly BUDGET_APPROVAL_DIR="$STATE_DIR/budget-approvals"
 readonly WORKTREE_BASE_DIR="$STATE_DIR/worktree-bases"
 readonly EXAMPLE_CONFIG="$SCRIPT_DIR/codex-issue-worker.config.example"
 readonly LAUNCHD_LABEL="com.alundgren.irudd-piploy.codex-issue-worker"
+WORKER_RUN_COMMAND=""
 
 usage() {
   cat <<'EOF'
@@ -101,8 +104,49 @@ with_lock() {
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     die "another worker run is active ($LOCK_DIR exists)"
   fi
-  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT HUP INT TERM
+
+  WORKER_RUN_COMMAND="$1"
+  record_run_state "running" "" "$WORKER_RUN_COMMAND"
+  : >"$LAST_RUN_ERROR_FILE"
+
+  # Keep the complete stderr from this invocation alongside its final state.
+  # launchd otherwise only exposes an accumulating shared log, which makes a
+  # transient failure difficult to associate with a particular scheduled run.
+  exec 3>&2
+  exec 2>"$LAST_RUN_ERROR_FILE"
+  trap 'finish_locked_run "$?" "$WORKER_RUN_COMMAND"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   "$@"
+}
+
+record_run_state() {
+  local outcome="$1"
+  local exit_code="$2"
+  local command_name="$3"
+  printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$outcome" "$exit_code" "$command_name" >"$LAST_RUN_FILE"
+}
+
+finish_locked_run() {
+  local exit_code="$1"
+  local command_name="$2"
+
+  trap - EXIT HUP INT TERM
+  exec 2>&3
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+
+  if [ "$exit_code" -eq 0 ]; then
+    record_run_state "completed" "$exit_code" "$command_name"
+  else
+    if [ ! -s "$LAST_RUN_ERROR_FILE" ]; then
+      printf 'Worker exited with status %s without writing an error message.\n' "$exit_code" >"$LAST_RUN_ERROR_FILE"
+    fi
+    record_run_state "failed" "$exit_code" "$command_name"
+    cat "$LAST_RUN_ERROR_FILE" >&2
+  fi
+
+  exec 3>&-
 }
 
 claimed_issue() {
@@ -198,6 +242,18 @@ status() {
     echo "launchd job: not installed"
   fi
 
+  if [ -f "$LAST_RUN_FILE" ]; then
+    local last_run_timestamp last_run_outcome last_run_exit_code last_run_command
+    IFS=$'\t' read -r last_run_timestamp last_run_outcome last_run_exit_code last_run_command <"$LAST_RUN_FILE"
+    echo "last run: $last_run_outcome ($last_run_command at $last_run_timestamp${last_run_exit_code:+, exit $last_run_exit_code})"
+    if [ "$last_run_outcome" = "failed" ] && [ -s "$LAST_RUN_ERROR_FILE" ]; then
+      echo "last run error:"
+      sed -n '1,8{s/^/  /;p;}' "$LAST_RUN_ERROR_FILE"
+    fi
+  else
+    echo "last run: no local record"
+  fi
+
   local active_issue
   active_issue="$(claimed_issue)"
   if [ -n "$active_issue" ]; then
@@ -213,12 +269,13 @@ install_launchd() {
   require_command launchctl
   require_command plutil
 
-  local plist temporary domain program_path output_path error_path
+  local plist temporary domain program_path output_path error_path launchd_path
   plist="$(launchd_plist)"
   domain="gui/$(id -u)"
   program_path="$REPO_ROOT/scripts/codex-issue-worker"
   output_path="$STATE_DIR/launchd.out.log"
   error_path="$STATE_DIR/launchd.err.log"
+  launchd_path="$PATH"
   temporary="$(mktemp "$STATE_DIR/$LAUNCHD_LABEL.XXXXXX")"
 
   {
@@ -236,6 +293,11 @@ install_launchd() {
   </array>
   <key>WorkingDirectory</key>
   <string>$(printf '%s' "$REPO_ROOT" | xml_escape)</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(printf '%s' "$launchd_path" | xml_escape)</string>
+  </dict>
   <key>StartInterval</key>
   <integer>600</integer>
   <key>ProcessType</key>

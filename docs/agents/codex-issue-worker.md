@@ -79,7 +79,9 @@ process deliberately after inspecting it.
 `launchd` requires absolute paths, so the worker generates its local plist at
 installation time. The checked-in files contain no user or repository path;
 the generated plist uses the current checkout path and is stored under your
-`~/Library/LaunchAgents` directory.
+`~/Library/LaunchAgents` directory. It also captures the current shell `PATH`,
+so Homebrew-installed tools such as `gh`, `codex`, and `pnpm` remain available
+to the scheduled job. Re-run installation after changing your tool locations.
 
 ```bash
 scripts/codex-issue-worker install-launchd
@@ -90,6 +92,11 @@ Unload the job to stop polling completely:
 ```bash
 scripts/codex-issue-worker uninstall-launchd
 ```
+
+`status` includes the latest local `run` or `continue` outcome. On failure, it
+prints the first lines of `.codex-issue-worker/last-run.err.log`; the complete
+per-run error is kept there rather than being mixed only into launchd's shared
+stderr log.
 
 Prefer `disable` as the normal kill switch, since the worker verifies it before
 each action. Loading the job is an additional "this laptop only" gate.
