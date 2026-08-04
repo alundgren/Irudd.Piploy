@@ -1,6 +1,6 @@
 {
   "Piploy": {
-    "RootDirectory": "/home/irudd/Piploy/root",
+    "RootDirectory": "/opt/piploy/root",
     "MinutesBetweenBackgroundPolls": 60,
     "Applications": [
       {

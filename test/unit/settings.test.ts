@@ -27,7 +27,7 @@ describe("loadSettings", () => {
     const settings = loadSettings(path.join(fixturesDir, "piploy.valid.json"));
 
     expect(settings).toEqual({
-      RootDirectory: "/home/irudd/Piploy/root",
+      RootDirectory: "/opt/piploy/root",
       MinutesBetweenBackgroundPolls: 60,
       Applications: [
         {
@@ -125,16 +125,12 @@ describe("resolveConfigPath", () => {
 
   it("resolves piploy.json relative to the bundle directory by default", () => {
     delete process.env.PIPLOY_CONFIG;
-    expect(resolveConfigPath("/home/irudd/Piploy")).toBe(
-      "/home/irudd/Piploy/piploy.json",
-    );
+    expect(resolveConfigPath("/opt/piploy")).toBe("/opt/piploy/piploy.json");
   });
 
   it("prefers the PIPLOY_CONFIG override when set", () => {
     process.env.PIPLOY_CONFIG = "/etc/piploy/custom.json";
-    expect(resolveConfigPath("/home/irudd/Piploy")).toBe(
-      "/etc/piploy/custom.json",
-    );
+    expect(resolveConfigPath("/opt/piploy")).toBe("/etc/piploy/custom.json");
   });
 });
 
@@ -142,17 +138,17 @@ describe("application directories", () => {
   it("derives the per-application root and repo directories", () => {
     const settings = parseSettings({
       Piploy: {
-        RootDirectory: "/home/irudd/Piploy/root",
+        RootDirectory: "/opt/piploy/root",
         Applications: [validApplication],
       },
     });
     const application = settings.Applications[0]!;
 
     expect(getApplicationRootDirectory(settings, application)).toBe(
-      "/home/irudd/Piploy/root/app1",
+      "/opt/piploy/root/app1",
     );
     expect(getApplicationRepoDirectory(settings, application)).toBe(
-      "/home/irudd/Piploy/root/app1/repo",
+      "/opt/piploy/root/app1/repo",
     );
   });
 });
