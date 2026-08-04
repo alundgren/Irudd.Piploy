@@ -1,5 +1,6 @@
 allowBuilds:
   cpu-features: false
   esbuild: true
+  node-git-server: false
   protobufjs: false
   ssh2: false
