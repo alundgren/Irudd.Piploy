@@ -1,0 +1,15 @@
+{
+  "Piploy": {
+    "RootDirectory": "/home/irudd/Piploy/root",
+    "MinutesBetweenBackgroundPolls": 60,
+    "Applications": [
+      {
+        "Name": "app1",
+        "GitRepositoryUrl": "https://github.com/example/app1.git",
+        "DockerfilePath": "Dockerfile",
+        "PortMappings": ["8080:80"]
+      }
+    ],
+    "IsTestRun": false
+  }
+}
