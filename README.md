@@ -1,66 +1,99 @@
-## Overview
-The basic idea of this tool:
+# Piploy
 
-You register a git repo + docker commands to run the service and this tool will make sure they are always running.
+Piploy registers a Git repository and its Docker commands, then keeps the
+resulting container running as a background daemon on a Raspberry Pi.
+
+## One-time bootstrap
+
+These steps install Piploy on a new Pi. They assume the service user is
+`irudd` and its files live in `/home/irudd/Piploy`.
+
+1. Install Node.js 24 from the NodeSource apt repository:
+
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+   sudo apt install -y nodejs
+   ```
+
+2. Create Piploy's root directory and place its configuration alongside the
+   bundle:
+
+   ```bash
+   mkdir -p /home/irudd/Piploy/root
+   ```
+
+   Place `piploy.json` at `/home/irudd/Piploy/piploy.json`. Piploy resolves
+   configuration relative to the bundle, rather than the current working
+   directory. Set `PIPLOY_CONFIG` to use a configuration file elsewhere.
+
+3. Download the current release bundle:
+
+   ```bash
+   curl -fL https://github.com/alundgren/Irudd.Piploy/releases/latest/download/piploy.cjs \
+     -o /home/irudd/Piploy/piploy.cjs
+   ```
+
+   The resulting layout is:
+
+   ```text
+   /home/irudd/Piploy/
+   ├── piploy.cjs       # deployed bundle
+   ├── piploy.cjs.prev  # rollback copy, created after the first self-update
+   ├── piploy.json      # configuration; deployments never overwrite it
+   └── root/             # application repositories and logs
+   ```
+
+4. Create `/etc/systemd/system/piploy.service`:
+
+   ```ini
+   [Unit]
+   Description=Raspberry pi + docker deployment tool
+
+   [Service]
+   WorkingDirectory=/home/irudd/Piploy
+   ExecStart=/usr/bin/node /home/irudd/Piploy/piploy.cjs service-start
+   Restart=always
+   RestartSec=10
+   SyslogIdentifier=piploy
+   User=irudd
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+5. Register and start the service:
+
+   ```bash
+   sudo systemctl daemon-reload && sudo systemctl enable --now piploy
+   ```
+
+## Deploying a release
+
+Tag and push the release:
+
+```bash
+git tag vX.Y.Z
+git push --tags
+```
+
+The release workflow runs linting, tests, and the build, then attaches
+`dist/piploy.cjs` to the GitHub release. The running daemon checks GitHub's
+latest release on its poll timer. Within one
+`MinutesBetweenBackgroundPolls` interval, it downloads the bundle, swaps it
+into place, exits, and systemd starts the new version. No action on the Pi is
+needed for routine deploys.
+
+## Rollback
+
+If a release is bad, roll back manually over SSH:
+
+```bash
+mv /home/irudd/Piploy/piploy.cjs.prev /home/irudd/Piploy/piploy.cjs && sudo systemctl restart piploy
+```
+
+There is no automatic health check or revert; a release that fails at startup
+will remain in systemd's restart loop until it is rolled back manually.
 
 ## TODO
 
-- Git commit hook + minimal web server on the pi to receive the hook so we dont have to poll at all
-- Dashboard
-
-## How a full workflow works
-
-Check that piploy status
-> ./piploy -status
-
-
-## Build self contained
-> dotnet publish -c Release --runtime linux-arm64 --self-contained -p:PublishSingleFile=true
-
-Copy over to the pi
-
-> sudo chmod +x ./piploy
-
-> ./piploy
-
-Dont forget to chmod +x ... after copying
-
-## Install dotnet on the pi
-
-TODO: Install dotnet
-
-## Build and start the tool
-Publish:
-dotnet publish -c Release -o /home/<user>/Piploy
-
-Service:
-sudo nano /etc/systemd/system/piploy.service
-
-Content:
-[Unit]
-Description=Raspberry pi + docker deployment tool
-
-[Service]
-WorkingDirectory=/home/<user>/Piploy
-ExecStart=/home/<user>/Piploy/piploy service-start
-Restart=always
-RestartSec=10
-SyslogIdentifier=piploy
-User=<user>
-Environment=ASPNETCORE_ENVIRONMENT=Production
-
-[Install]
-WantedBy=multi-user.target
-
-Register daemon:
-sudo systemctl daemon-reload
-sudo systemctl enable piploy.service
-
-Start daemon:
-sudo systemctl start piploy.service
-
-Status of daemon:
-sudo systemctl status piploy.service
-
-Note:
-When running this way piploy service-stop is more like a restart since the daemon will instantly restart it.
+- Git commit hook + minimal web server on the Pi to receive the hook so Piploy does not have to poll.

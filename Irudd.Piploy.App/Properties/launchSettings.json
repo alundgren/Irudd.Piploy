@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "Irudd.Piploy.App": {
-      "commandName": "Project",
-      "commandLineArgs": "wipeall"
-    }
-  }
-}
