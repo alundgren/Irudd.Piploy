@@ -1,8 +1,9 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import Dockerode from "dockerode";
 
+import { validateDockerfileImageReferences } from "./dockerImagePolicy.js";
 import {
   getDockerfilePathFromSetting,
   planContainer,
@@ -194,9 +195,12 @@ export function createDockerService(
     );
     if (!existsSync(absoluteDockerfilePath)) {
       throw new Error(
-        `Dockerfile '${application.DockerfilePath}' does not exist. Expected location: '${absoluteDockerfilePath}'`,
+        `Dockerfile '${application.DockerfilePath ?? "Dockerfile"}' does not exist. Expected location: '${absoluteDockerfilePath}'`,
       );
     }
+    validateDockerfileImageReferences(
+      readFileSync(absoluteDockerfilePath, "utf8"),
+    );
 
     const uniqueId = crypto.randomUUID();
     logger.info(`Building docker image for commit ${commit.hash}`);

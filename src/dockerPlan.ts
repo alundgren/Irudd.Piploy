@@ -50,11 +50,15 @@ export function planContainer(
   return { action: "recreate", existingContainerId: existingContainer.id };
 }
 
-/** Converts the config setting into a Docker build context and its Dockerfile. */
+/**
+ * Converts the config setting into a Docker build context and its Dockerfile,
+ * resolving to the repository-root Dockerfile when unset (#20).
+ */
 export function getDockerfilePathFromSetting(
-  dockerfilePath: string,
+  dockerfilePath: string | undefined,
 ): DockerfilePath {
-  let normalized = dockerfilePath.replaceAll("\\", "/").trim();
+  const setting = dockerfilePath?.trim() ? dockerfilePath : "Dockerfile";
+  let normalized = setting.replaceAll("\\", "/").trim();
   normalized = normalized.startsWith("/") ? normalized.slice(1) : normalized;
 
   if (normalized.endsWith("/")) {

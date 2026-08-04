@@ -25,7 +25,7 @@ const PortMappingSchema = z.string().transform((value, ctx) => {
 const ApplicationSchema = z.object({
   Name: z.string().regex(/^[A-Za-z0-9_-]+$/),
   GitRepositoryUrl: z.string(),
-  DockerfilePath: z.string(),
+  DockerfilePath: z.string().optional(),
   PortMappings: z.array(PortMappingSchema).optional(),
 });
 

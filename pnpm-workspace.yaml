@@ -4,3 +4,27 @@ allowBuilds:
   node-git-server: false
   protobufjs: false
   ssh2: false
+
+# Supply-chain hardening (#20): fail closed rather than resolve a freshly
+# published, potentially poisoned package or trust a downgraded/altered lockfile.
+minimumReleaseAge: 11520
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+trustPolicy: no-downgrade
+trustLockfile: false
+blockExoticSubdeps: true
+
+# Reviewed, version-specific trust-policy exceptions only (#20).
+# chokidar@4.0.3 (tsup's --watch dependency, dev-only, never shipped in the
+# release bundle) lost npm provenance versus 4.0.1; 5.x restores it but tsup
+# pins ^4.0.3. A known, widely reported false positive, not a takeover signal.
+trustPolicyExclude:
+  - chokidar@4.0.3
+overrides:
+  brace-expansion@<1.1.17: ^1.1.17
+  brace-expansion@<1.1.18: ^1.1.18
+  brace-expansion@>=4.0.0 <5.0.9: ^5.0.9
+  esbuild@>=0.27.3 <0.28.1: ^0.28.1
+minimumReleaseAgeExclude:
+  - esbuild@0.28.1
+  - brace-expansion@1.1.17 || 1.1.18 || 5.0.9

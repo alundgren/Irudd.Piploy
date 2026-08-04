@@ -75,6 +75,16 @@ describe("getDockerfilePathFromSetting", () => {
     expect(getDockerfilePathFromSetting(setting)).toEqual(expected);
   });
 
+  it.each([undefined, "", "   "])(
+    "resolves to the repository-root Dockerfile when unset (%j)",
+    (setting) => {
+      expect(getDockerfilePathFromSetting(setting)).toEqual({
+        contextDirectory: "",
+        dockerfileName: "Dockerfile",
+      });
+    },
+  );
+
   it("rejects a path that points at a directory", () => {
     expect(() => getDockerfilePathFromSetting("api/")).toThrow(
       "Invalid DockerfilePath",
