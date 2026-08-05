@@ -3,9 +3,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  requestDaemon,
   startDaemon,
   type Daemon,
   type DaemonDeps,
@@ -86,7 +87,7 @@ describe("daemon", () => {
 
     expect((await stat(daemon.socketPath)).mode & 0o777).toBe(0o600);
     await expect(
-      sendRequest(daemon.socketPath, { command: "status" }),
+      requestDaemon({ command: "status" }, daemon.socketPath),
     ).resolves.toEqual({
       ok: true,
       status: {
@@ -143,10 +144,30 @@ describe("daemon", () => {
     });
 
     await expect(
-      sendRequest(daemon.socketPath, { command: "stop" }),
+      sendRequest(daemon.socketPath, { command: "bogus" }),
     ).resolves.toEqual({
       ok: false,
       reason: "invalid-request",
     });
+  });
+
+  it("acknowledges stop requests before shutting down the daemon", async () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+      return undefined as never;
+    }) as typeof process.exit);
+    const daemon = await start({
+      poll: async () => {},
+      getStatus: async () => ({ applications: [] }),
+    });
+
+    await expect(
+      sendRequest(daemon.socketPath, { command: "stop" }),
+    ).resolves.toEqual({ ok: true });
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    await expect(
+      requestDaemon({ command: "status" }, daemon.socketPath),
+    ).resolves.toBeUndefined();
+
+    exit.mockRestore();
   });
 });

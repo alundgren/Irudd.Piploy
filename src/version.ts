@@ -6,4 +6,7 @@ declare const __PIPLOY_VERSION__: string;
  * comparison — otherwise the package version plus the build's short git
  * commit hash, for local/dev builds.
  */
-export const piployVersion = __PIPLOY_VERSION__;
+export const piployVersion =
+  typeof __PIPLOY_VERSION__ === "undefined"
+    ? "development"
+    : __PIPLOY_VERSION__;
