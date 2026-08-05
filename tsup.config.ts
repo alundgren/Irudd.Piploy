@@ -9,6 +9,9 @@ const packageJsonPath = fileURLToPath(
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
   version: string;
 };
+const optionalTransportDependencyStubPath = fileURLToPath(
+  new URL("./src/optionalTransportDependencyStub.cjs", import.meta.url),
+);
 
 function releaseTagAtHead(): string | undefined {
   try {
@@ -37,6 +40,22 @@ export default defineConfig({
   sourcemap: true,
   outDir: "dist",
   clean: true,
+  // Piploy ships only this bundle. Keep every runtime dependency in it rather
+  // than relying on a node_modules directory beside the deployed artifact.
+  noExternal: [/^(commander|dockerode|isomorphic-git|pino|zod)(\/.*)?$/],
+  esbuildPlugins: [
+    {
+      name: "stub-unreachable-docker-ssh-transport",
+      setup(build) {
+        // docker-modem eagerly loads ssh2 and cpu-features even though Piploy
+        // connects only through Docker's local Unix socket. These native
+        // optional dependencies are intentionally unavailable on the Pi.
+        build.onResolve({ filter: /^(ssh2|cpu-features)$/ }, () => ({
+          path: optionalTransportDependencyStubPath,
+        }));
+      },
+    },
+  ],
   define: {
     __PIPLOY_VERSION__: JSON.stringify(version),
   },
