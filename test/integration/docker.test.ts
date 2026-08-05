@@ -48,7 +48,7 @@ describe("docker adapter", () => {
     await mkdir(repoDirectory, { recursive: true });
     await writeFile(
       path.join(repoDirectory, "Dockerfile"),
-      'FROM alpine:3.20\nCMD ["sh", "-c", "while true; do sleep 3600; done"]\n',
+      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "while true; do sleep 3600; done"]\n',
     );
 
     const built = await docker.ensureImageExists(application, commit);

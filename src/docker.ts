@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import Dockerode from "dockerode";
@@ -8,6 +8,7 @@ import {
   planContainer,
   planImage,
   type DockerContainer,
+  validateDockerfileImageReferences,
 } from "./dockerPlan.js";
 import type { Logger } from "./logger.js";
 import type { Application, PiploySettings } from "./settings.js";
@@ -195,6 +196,16 @@ export function createDockerService(
     if (!existsSync(absoluteDockerfilePath)) {
       throw new Error(
         `Dockerfile '${application.DockerfilePath}' does not exist. Expected location: '${absoluteDockerfilePath}'`,
+      );
+    }
+    const violations = validateDockerfileImageReferences(
+      readFileSync(absoluteDockerfilePath, "utf8"),
+    );
+    if (violations.length > 0) {
+      throw new Error(
+        `Dockerfile base-image policy rejected:\n${violations
+          .map(({ reference, reason }) => `- ${reference}: ${reason}`)
+          .join("\n")}`,
       );
     }
 
