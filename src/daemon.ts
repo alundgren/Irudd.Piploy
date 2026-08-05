@@ -19,7 +19,8 @@ const defaultQueueCapacity = 1000;
 const defaultPollIntervalMinutes = 60;
 const socketProbeTimeoutMilliseconds = 750;
 
-export type DaemonRequest = { command: "status" } | { command: "poll" };
+export type DaemonRequest =
+  { command: "status" } | { command: "poll" } | { command: "stop" };
 
 export type DaemonResponse =
   | { ok: true; status: DaemonStatus }
@@ -60,7 +61,8 @@ interface QueuedRequest {
   respond(response: DaemonResponse): void;
 }
 
-function defaultSocketPath(): string {
+/** Resolves the daemon socket alongside the active Piploy configuration. */
+export function defaultSocketPath(): string {
   return path.join(path.dirname(resolveConfigPath()), "piploy.sock");
 }
 
@@ -73,7 +75,9 @@ function parseRequest(value: unknown): DaemonRequest | undefined {
     typeof value !== "object" ||
     value === null ||
     !("command" in value) ||
-    (value.command !== "status" && value.command !== "poll")
+    (value.command !== "status" &&
+      value.command !== "poll" &&
+      value.command !== "stop")
   ) {
     return undefined;
   }
@@ -169,6 +173,59 @@ function close(server: net.Server): Promise<void> {
   });
 }
 
+/**
+ * Sends one request to the local daemon. A connection attempt doubles as the
+ * liveness probe: only establishing the socket connection is time-boxed.
+ */
+export function requestDaemon(
+  request: DaemonRequest,
+  socketPath: string = defaultSocketPath(),
+): Promise<DaemonResponse | undefined> {
+  return new Promise((resolve) => {
+    const client = net.createConnection(socketPath);
+    let settled = false;
+    let connected = false;
+    let received = "";
+
+    const finish = (response: DaemonResponse | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      client.destroy();
+      resolve(response);
+    };
+
+    const timeout = setTimeout(
+      () => finish(undefined),
+      socketProbeTimeoutMilliseconds,
+    );
+
+    client.once("connect", () => {
+      connected = true;
+      clearTimeout(timeout);
+      client.write(JSON.stringify(request) + "\n");
+    });
+    client.on("data", (chunk: Buffer) => {
+      received += chunk.toString("utf8");
+      const newline = received.indexOf("\n");
+      if (newline === -1) return;
+      try {
+        finish(JSON.parse(received.slice(0, newline)) as DaemonResponse);
+      } catch {
+        finish(undefined);
+      }
+    });
+    client.once("end", () => {
+      if (!settled) finish(undefined);
+    });
+    client.once("error", () => {
+      // A failed connection is an unreachable daemon. A later socket failure
+      // before a response is equally unusable to the caller.
+      if (!connected || !settled) finish(undefined);
+    });
+  });
+}
+
 /** Starts the local socket server, serial worker, and periodic poll feeder. */
 export async function startDaemon(
   settings: PiploySettings,
@@ -193,11 +250,24 @@ export async function startDaemon(
   const sockets = new Set<net.Socket>();
   let workerRunning = false;
   let stopping = false;
+  let shutdownPromise: Promise<void> | undefined;
+
+  function shutdown(): Promise<void> {
+    if (shutdownPromise) return shutdownPromise;
+    stopping = true;
+    clearInterval(timer);
+    for (const socket of sockets) socket.destroy();
+    shutdownPromise = close(server);
+    return shutdownPromise;
+  }
 
   async function runRequest(request: DaemonRequest): Promise<DaemonResponse> {
     try {
       if (request.command === "status") {
         return { ok: true, status: await deps.getStatus() };
+      }
+      if (request.command === "stop") {
+        return { ok: true };
       }
       await deps.poll();
       return { ok: true };
@@ -212,7 +282,19 @@ export async function startDaemon(
       while (!stopping) {
         const queued = queue.shift();
         if (!queued) return;
-        queued.respond(await runRequest(queued.request));
+        const response = await runRequest(queued.request);
+        queued.respond(response);
+        if (queued.request.command === "stop" && response.ok) {
+          stopping = true;
+          // Let socket.end() flush its acknowledgement before closing all
+          // active sockets and exiting the service process.
+          setImmediate(() => {
+            void shutdown()
+              .then(() => process.exit(0))
+              .catch((error: unknown) => logError(logger, error));
+          });
+          return;
+        }
       }
     } finally {
       workerRunning = false;
@@ -306,11 +388,6 @@ export async function startDaemon(
 
   return {
     socketPath,
-    async stop(): Promise<void> {
-      stopping = true;
-      clearInterval(timer);
-      for (const socket of sockets) socket.destroy();
-      await close(server);
-    },
+    stop: shutdown,
   };
 }

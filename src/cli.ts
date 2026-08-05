@@ -1,7 +1,15 @@
 import { Command } from "commander";
 
-import { notImplementedMessage } from "./commands.js";
-import type { Logger } from "./logger.js";
+import {
+  createCommandDeps,
+  poll,
+  serviceStart,
+  serviceStop,
+  status,
+  wipeAll,
+} from "./commands.js";
+import { createLogger, type Logger } from "./logger.js";
+import { loadSettings, resolveConfigPath } from "./settings.js";
 import { attemptSelfUpdate } from "./selfUpdate.js";
 import { piployVersion } from "./version.js";
 
@@ -13,13 +21,21 @@ const commandNames = [
   "wipeall",
 ] as const;
 
-function registerStubCommand(
+function registerCommand(
   program: Command,
   commandName: (typeof commandNames)[number],
 ): void {
-  program.command(commandName).action(() => {
-    console.error(notImplementedMessage(commandName));
-    process.exitCode = 1;
+  program.command(commandName).action(async () => {
+    const settings = loadSettings(resolveConfigPath());
+    const deps = createCommandDeps(settings, createLogger(settings));
+    const actions = {
+      status,
+      "service-start": serviceStart,
+      "service-stop": serviceStop,
+      poll,
+      wipeall: wipeAll,
+    } as const;
+    await actions[commandName](deps);
   });
 }
 
@@ -45,10 +61,10 @@ export function createProgram(): Command {
     }
   });
   for (const commandName of commandNames) {
-    registerStubCommand(program, commandName);
+    registerCommand(program, commandName);
   }
 
   return program;
 }
 
-createProgram().parse();
+void createProgram().parseAsync();
