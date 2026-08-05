@@ -67,6 +67,40 @@ These steps install Piploy on a new Pi. They assume the service user is
    sudo systemctl daemon-reload && sudo systemctl enable --now piploy
    ```
 
+## Running CLI commands
+
+The deployed bundle is both the daemon and the command line client:
+
+```bash
+node piploy.cjs <command>
+```
+
+Piploy resolves `piploy.json` and `piploy.sock` relative to the bundle rather
+than the current directory, so the bundle can also be given by an absolute path
+from anywhere. Set `PIPLOY_CONFIG` to point at a configuration file elsewhere;
+the socket then lives next to that file.
+
+The daemon's control socket is created with `0600` permissions and owned by the
+user the daemon runs as, so the commands below must run as that same user to
+reach it. Another user gets the offline fallback described under `status`.
+
+| Command | What it does |
+| --- | --- |
+| `status` | Prints the Piploy version, whether the background service is reachable, and per-application Git and Docker state. |
+| `poll` | Runs one reconciliation now instead of waiting for the poll timer. |
+| `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up. |
+| `service-stop` | Asks the running daemon to shut down. |
+| `wipeall` | Removes all Piploy containers and images and deletes the root directory. Destructive. |
+| `self-update` | Checks GitHub for a newer release and installs it. |
+| `--version` | Prints the running bundle's version. |
+| `--help` | Lists the commands. |
+
+### `status`
+
+```bash
+node piploy.cjs status
+```
+
 ## Deploying a release
 
 Tag and push the release:
