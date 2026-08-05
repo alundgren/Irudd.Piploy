@@ -7,8 +7,7 @@ construction time. **`docker.ts` constructs Dockerode with an explicit
 `socketPath` for the local daemon socket instead, so the environment can no
 longer choose the transport.** This makes a single-host daemon's one real
 assumption an enforced invariant rather than a deployment coincidence, and it
-is the precondition for making the bundle self-contained
-([#55](https://github.com/alundgren/Irudd.Piploy/issues/55)): with the
+is the precondition for [ADR-0006](./0006-self-contained-bundle.md): with the
 SSH and TCP transports unreachable by construction, stubbing `ssh2` and
 `cpu-features` out of the bundle is provably safe rather than a bet that a code
 path is dead.
