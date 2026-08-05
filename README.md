@@ -69,23 +69,20 @@ These steps install Piploy on a new Pi. They assume the service user is
 
 ## Running CLI commands
 
-The deployed bundle is both the daemon and the command line client. Run it with
-Node against the absolute bundle path, as the service user:
+The deployed bundle is both the daemon and the command line client:
 
 ```bash
-sudo -u irudd node /home/irudd/Piploy/piploy.cjs <command>
+node piploy.cjs <command>
 ```
 
-Run as `irudd`. The daemon's control socket is created at
-`/home/irudd/Piploy/piploy.sock` with `0600` permissions and owned by the
-service user, so another user cannot reach the running daemon and will silently
-get the offline fallback described below. Running as `root` also leaves
-root-owned files in the log directory.
+Piploy resolves `piploy.json` and `piploy.sock` relative to the bundle rather
+than the current directory, so the bundle can also be given by an absolute path
+from anywhere. Set `PIPLOY_CONFIG` to point at a configuration file elsewhere;
+the socket then lives next to that file.
 
-The bundle path may be given from any working directory: Piploy resolves
-`piploy.json` and `piploy.sock` relative to the bundle, not the current
-directory. Set `PIPLOY_CONFIG` to point at a configuration file elsewhere; the
-socket then lives next to that file.
+The daemon's control socket is created with `0600` permissions and owned by the
+user the daemon runs as, so the commands below must run as that same user to
+reach it. Another user gets the offline fallback described under `status`.
 
 | Command | What it does |
 | --- | --- |
@@ -101,7 +98,7 @@ socket then lives next to that file.
 ### `status`
 
 ```bash
-sudo -u irudd node /home/irudd/Piploy/piploy.cjs status
+node piploy.cjs status
 ```
 
 ```text
@@ -142,7 +139,7 @@ builds, starts, or stops anything.
 ### `poll`
 
 ```bash
-sudo -u irudd node /home/irudd/Piploy/piploy.cjs poll
+node piploy.cjs poll
 ```
 
 Fetches each repository, rebuilds when the remote moved, and restarts
@@ -156,7 +153,7 @@ in the foreground process instead.
 ### `service-stop`
 
 ```bash
-sudo -u irudd node /home/irudd/Piploy/piploy.cjs service-stop
+node piploy.cjs service-stop
 ```
 
 Stops the daemon after it finishes any in-flight work. Under systemd the unit
@@ -174,7 +171,7 @@ listening.
 ### `self-update`
 
 ```bash
-sudo -u irudd node /home/irudd/Piploy/piploy.cjs self-update
+node piploy.cjs self-update
 ```
 
 Forces the release check that the daemon otherwise performs on its poll timer.
@@ -190,7 +187,7 @@ sudo systemctl restart piploy
 ### `wipeall`
 
 ```bash
-sudo -u irudd node /home/irudd/Piploy/piploy.cjs wipeall
+node piploy.cjs wipeall
 ```
 
 Removes every Piploy-managed container and image, then deletes the configured
@@ -204,7 +201,7 @@ Piploy writes to stdout and to a weekly rotating file under the configured root
 directory, keeping only the current week's file:
 
 ```bash
-tail -f /home/irudd/Piploy/root/logs/piploy-log-*.txt
+tail -f root/logs/piploy-log-*.txt
 ```
 
 Because the daemon runs under systemd, the same lines are also in the journal:
