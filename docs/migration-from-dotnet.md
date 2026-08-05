@@ -17,52 +17,33 @@ Throughout, the service user is `irudd` and its files live in
 
 ---
 
-## Read this first: two blockers before you touch the Pi
+## Read this first: this migration is blocked
 
-Both are in the release/packaging path, not in the daemon. Clear them on your
-dev box before starting Phase 1, or the install in Phase 5 will fail.
+**Do not start until [#55](https://github.com/alundgren/Irudd.Piploy/issues/55)
+is fixed and a release carrying the fix is published.** The blocker is in the
+packaging path, not in the daemon, and it makes the README's bootstrap produce
+a service that cannot start.
 
-### 1. There is no published release yet
-
-The repository has no tags, so
-`https://github.com/alundgren/Irudd.Piploy/releases/latest/download/piploy.cjs`
-— the URL in the README's bootstrap — has nothing behind it. Cut a release
-first (`git tag v0.1.0 && git push --tags`); the release workflow lints, tests,
-builds, and attaches `dist/piploy.cjs`.
-
-Cutting the tag also matters for self-update: the bundle's baked-in version is
-the git tag when built at a tagged commit, and the daemon compares that string
-to the release's `tag_name`. A hand-built bundle carries `0.1.0+<shorthash>`
-instead, which never matches — so a locally-built bundle scp'd to the Pi will
-be **overwritten by the latest release within one poll interval**. Install from
-a real release, not from a local build.
-
-### 2. The released bundle is not self-contained
-
-`dist/piploy.cjs` is ~42 KB and still `require`s `commander`, `dockerode`,
-`isomorphic-git`, `pino`, and `zod` at runtime — tsup treats `dependencies` as
-external by default. Following the README's step 3 alone produces:
+The `piploy.cjs` attached to
+[v1.0.0](https://github.com/alundgren/Irudd.Piploy/releases/tag/v1.0.0) is
+~42 KB and still `require`s `commander`, `dockerode`, `isomorphic-git`, `pino`,
+and `zod` at runtime — tsup treats `dependencies` as external by default.
+Downloading it as the README instructs and running it gives:
 
 ```
 Error: Cannot find module 'commander'
 ```
 
-Two ways out. Pick one before Phase 5.
+Once #55 lands, install from the release that contains it and the rest of this
+guide applies as written; the dependency-shipping steps flagged below in
+Phase 3 and Phase 5 simply drop away.
 
-**Option A — make the bundle self-contained (preferred, needs a code change).**
-`noExternal: [/.*/]` alone does not work: esbuild fails resolving the optional
-native addons behind `dockerode` → `docker-modem` → `ssh2`
-(`sshcrypto.node`, `cpufeatures.node`). Marking `ssh2`/`cpu-features` external
-does not work either, because `docker-modem` requires `ssh2` eagerly at module
-load, so the bundle throws `Cannot find module 'ssh2'` at startup even though
-Piploy only ever talks to the Docker Unix socket. It needs an alias/stub for
-the SSH transport. This is the shape
-[the packaging research](research/arm64-packaging.md) assumed ("one file,
-CommonJS"), so it is worth doing properly rather than working around.
+### The workaround, if you must migrate before #55 lands
 
-**Option B — ship production dependencies alongside the bundle (works today).**
-Verified end to end. On the Pi, next to `piploy.cjs`, place `package.json`,
-`pnpm-lock.yaml`, and `pnpm-workspace.yaml` from the release's tag, then:
+Ship production dependencies alongside the bundle. Verified end to end, but read
+the caveat below before relying on it. On the Pi, next to `piploy.cjs`, place
+`package.json`, `pnpm-lock.yaml`, and `pnpm-workspace.yaml` from the release's
+tag, then:
 
 ```bash
 pnpm install --prod --frozen-lockfile
@@ -72,12 +53,20 @@ pnpm install --prod --frozen-lockfile
 supply-chain policy the lockfile was resolved under, and `--frozen-lockfile`
 fails without it.
 
-Option B has a sharp edge worth knowing before you rely on it: **self-update
-swaps `piploy.cjs` only.** A future release that adds or bumps a runtime
-dependency will leave a bundle that requires modules the Pi's `node_modules`
-does not have, and the daemon will crash-loop under systemd until you refresh
-them by hand. If you go with Option B, re-run the install after any release
-that changes `dependencies` in `package.json`.
+The caveat: **self-update swaps `piploy.cjs` only.** A future release that adds
+or bumps a runtime dependency will leave a bundle requiring modules the Pi's
+`node_modules` does not have, and the daemon will crash-loop under
+`Restart=always` — with no health check and no automatic revert — until you
+refresh them by hand. Under this workaround, re-run the install after any
+release that changes `dependencies` in `package.json`.
+
+### One thing to get right regardless
+
+Install from a published release, not a local build. The bundle's baked-in
+version is the git tag only when built at a tagged commit; a hand-built bundle
+carries `<pkgversion>+<shorthash>`, which never equals a release `tag_name` — so
+a locally-built bundle scp'd to the Pi is **overwritten by the latest release
+within one poll interval**.
 
 ---
 
@@ -197,9 +186,10 @@ cd /home/irudd/piploy-next
 curl -fL https://github.com/alundgren/Irudd.Piploy/releases/latest/download/piploy.cjs -o piploy.cjs
 ```
 
-If you took **Option B**, also fetch `package.json`, `pnpm-lock.yaml`, and
+**Pre-#55 workaround only:** also fetch `package.json`, `pnpm-lock.yaml`, and
 `pnpm-workspace.yaml` at the release tag and run
-`pnpm install --prod --frozen-lockfile` here.
+`pnpm install --prod --frozen-lockfile` here. On a release that contains the
+#55 fix, skip this — the bundle stands alone.
 
 Smoke-test the binary itself:
 
@@ -264,10 +254,10 @@ Target layout:
 /home/irudd/Piploy/
 ├── piploy.cjs        # deployed bundle
 ├── piploy.json       # unchanged from the .NET install
-├── node_modules/     # Option B only
-├── package.json      # Option B only
-├── pnpm-lock.yaml    # Option B only
-├── pnpm-workspace.yaml  # Option B only
+├── node_modules/     # pre-#55 workaround only
+├── package.json      # pre-#55 workaround only
+├── pnpm-lock.yaml    # pre-#55 workaround only
+├── pnpm-workspace.yaml  # pre-#55 workaround only
 └── root/             # untouched repos and logs
 ```
 
@@ -401,5 +391,6 @@ they cost nothing and are the only copies of the old install.
   `mv /home/irudd/Piploy/piploy.cjs.prev /home/irudd/Piploy/piploy.cjs && sudo systemctl restart piploy`.
   There is no health check or automatic revert; a release that fails at startup
   sits in systemd's restart loop until someone intervenes.
-- **Under Option B**, re-run `pnpm install --prod --frozen-lockfile` after any
-  release that changed `dependencies`, or the self-updated bundle will crash-loop.
+- **Under the pre-#55 workaround**, re-run `pnpm install --prod
+  --frozen-lockfile` after any release that changed `dependencies`, or the
+  self-updated bundle will crash-loop. This goes away once #55 lands.
