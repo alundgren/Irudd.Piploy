@@ -3,6 +3,11 @@
 Piploy registers a Git repository and its Docker commands, then keeps the
 resulting container running as a background daemon on a Raspberry Pi.
 
+Migrating a Pi that already runs the .NET build? Follow
+[the migration guide](docs/migration-from-dotnet.md) instead of the bootstrap
+below — it reuses the existing configuration, repositories, and running
+containers.
+
 ## One-time bootstrap
 
 These steps install Piploy on a new Pi. They assume the service user is
