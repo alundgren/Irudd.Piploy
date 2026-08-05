@@ -50,6 +50,7 @@ describe("daemon", () => {
 
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop()));
+    vi.useRealTimers();
   });
 
   async function start(
@@ -83,6 +84,7 @@ describe("daemon", () => {
           },
         ],
       }),
+      attemptSelfUpdate: async () => "up-to-date",
     });
 
     expect((await stat(daemon.socketPath)).mode & 0o777).toBe(0o600);
@@ -116,6 +118,7 @@ describe("daemon", () => {
           if (polls === 1) await firstPoll;
         },
         getStatus: async () => ({ applications: [] }),
+        attemptSelfUpdate: async () => "up-to-date",
       },
       1,
     );
@@ -141,6 +144,7 @@ describe("daemon", () => {
     const daemon = await start({
       poll: async () => {},
       getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
     });
 
     await expect(
@@ -158,6 +162,7 @@ describe("daemon", () => {
     const daemon = await start({
       poll: async () => {},
       getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
     });
 
     await expect(
@@ -170,4 +175,39 @@ describe("daemon", () => {
 
     exit.mockRestore();
   });
+
+  it.each([
+    ["up-to-date", ["update", "poll"]],
+    ["failed", ["update", "poll"]],
+    ["updated", ["update"]],
+  ] as const)(
+    "runs self-update before polling on a timer tick when it is %s",
+    async (updateResult, expectedEvents) => {
+      vi.useFakeTimers();
+      const events: string[] = [];
+      const socketPath = path.join(
+        await mkdtemp(path.join(os.tmpdir(), "piploy-")),
+        "piploy.sock",
+      );
+      const daemon = await startDaemon(settings, createLogger(), {
+        socketPath,
+        pollIntervalMinutes: 1,
+        deps: {
+          attemptSelfUpdate: async () => {
+            events.push("update");
+            return updateResult;
+          },
+          poll: async () => {
+            events.push("poll");
+          },
+          getStatus: async () => ({ applications: [] }),
+        },
+      });
+      daemons.push(daemon);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(events).toEqual(expectedEvents);
+    },
+  );
 });

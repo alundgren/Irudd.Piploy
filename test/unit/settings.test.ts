@@ -8,6 +8,7 @@ import {
   getApplicationRootDirectory,
   loadSettings,
   parseSettings,
+  resolveBundleDirectory,
   resolveConfigPath,
 } from "../../src/settings.js";
 
@@ -131,6 +132,14 @@ describe("resolveConfigPath", () => {
   it("prefers the PIPLOY_CONFIG override when set", () => {
     process.env.PIPLOY_CONFIG = "/etc/piploy/custom.json";
     expect(resolveConfigPath("/opt/piploy")).toBe("/etc/piploy/custom.json");
+  });
+});
+
+describe("resolveBundleDirectory", () => {
+  it("uses the directory containing the invoked bundle", () => {
+    expect(resolveBundleDirectory()).toBe(
+      path.dirname(process.argv[1] ?? process.cwd()),
+    );
   });
 });
 

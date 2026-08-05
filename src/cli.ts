@@ -8,8 +8,9 @@ import {
   status,
   wipeAll,
 } from "./commands.js";
-import { createLogger } from "./logger.js";
+import { createLogger, type Logger } from "./logger.js";
 import { loadSettings, resolveConfigPath } from "./settings.js";
+import { attemptSelfUpdate } from "./selfUpdate.js";
 import { piployVersion } from "./version.js";
 
 const commandNames = [
@@ -38,10 +39,27 @@ function registerCommand(
   });
 }
 
+function createConsoleLogger(): Logger {
+  const logger: Logger = {
+    debug: (message) => console.debug(message),
+    info: (message) => console.log(message),
+    warn: (message) => console.warn(message),
+    error: (message) => console.error(message),
+    child: () => logger,
+  };
+  return logger;
+}
+
 export function createProgram(): Command {
   const program = new Command();
 
   program.name("piploy").version(piployVersion);
+  program.command("self-update").action(async () => {
+    const result = await attemptSelfUpdate(createConsoleLogger());
+    if (result === "failed") {
+      process.exitCode = 1;
+    }
+  });
   for (const commandName of commandNames) {
     registerCommand(program, commandName);
   }

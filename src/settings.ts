@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
@@ -55,13 +54,14 @@ export function loadSettings(configPath: string): PiploySettings {
 
 /** `piploy.json` resolves relative to the running bundle, not CWD, with a `PIPLOY_CONFIG` override (#8). */
 export function resolveConfigPath(
-  bundleDir: string = defaultBundleDirectory(),
+  bundleDir: string = resolveBundleDirectory(),
 ): string {
   return process.env.PIPLOY_CONFIG ?? path.join(bundleDir, "piploy.json");
 }
 
-function defaultBundleDirectory(): string {
-  return path.dirname(fileURLToPath(import.meta.url));
+/** The directory containing the running Piploy bundle. */
+export function resolveBundleDirectory(): string {
+  return path.dirname(process.argv[1] ?? process.cwd());
 }
 
 export function getApplicationRootDirectory(

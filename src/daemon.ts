@@ -7,6 +7,7 @@ import { getCommitStatus, type GitCommitStatus } from "./git.js";
 import type { Logger } from "./logger.js";
 import { createOrchestrator } from "./orchestrator.js";
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
+import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
 import {
   resolveConfigPath,
   type Application,
@@ -40,6 +41,7 @@ export interface DaemonStatus {
 export interface DaemonDeps {
   poll(): Promise<void>;
   getStatus(): Promise<DaemonStatus>;
+  attemptSelfUpdate(): Promise<SelfUpdateResult>;
 }
 
 export interface DaemonOptions {
@@ -115,6 +117,7 @@ export function createDaemonDeps(
         settings.Applications.map(getApplicationStatus),
       ),
     }),
+    attemptSelfUpdate: () => attemptSelfUpdate(logger),
   };
 }
 
@@ -370,8 +373,15 @@ export async function startDaemon(
   chmodSync(socketPath, 0o600);
   server.on("error", (error) => logError(logger, error));
 
+  async function runTimerTick(): Promise<void> {
+    const updateResult = await deps.attemptSelfUpdate();
+    if (updateResult !== "updated") {
+      enqueue({ command: "poll" }, "timer");
+    }
+  }
+
   const timer = setInterval(
-    () => enqueue({ command: "poll" }, "timer"),
+    () => void runTimerTick(),
     pollIntervalMinutes * 60_000,
   );
   logger.info(`Daemon listening at ${socketPath}`);
