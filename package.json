@@ -11,7 +11,7 @@
     "lint": "tsc --noEmit && eslint . && prettier --check \"*.{js,ts,json}\" \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "vitest --config vitest.unit.config.ts run",
     "test:integration": "vitest --config vitest.integration.config.ts run",
-    "build": "tsup"
+    "build": "tsup && node scripts/verifyBundle.mjs"
   },
   "dependencies": {
     "commander": "^14.0.0",
