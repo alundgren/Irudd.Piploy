@@ -3,7 +3,7 @@
 ## Decision
 
 `dockerPlan.ts` contains the pure Docker decision policy. Given image or
-container state and a Git commit, `planImage` and `planContainer` select
+container state, a Git commit, and a runtime-configuration hash, `planImage` and `planContainer` select
 `reuse`, `build`, `start`, or `recreate`; unit tests exercise these functions
 with plain values. `docker.ts` is the I/O adapter around dockerode and applies
 that policy while also handling cleanup.

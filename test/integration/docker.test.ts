@@ -7,6 +7,7 @@ import Dockerode from "dockerode";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createDockerService } from "../../src/docker.js";
+import { getContainerConfigHash } from "../../src/dockerPlan.js";
 import type { Logger } from "../../src/logger.js";
 import type { PiploySettings } from "../../src/settings.js";
 
@@ -80,6 +81,14 @@ describe("docker adapter", () => {
     expect(inspect.Config.Env).toContain("DATABASE_PATH=/app/data/app.db");
     expect(inspect.HostConfig.Binds).toContain(
       `${path.join(temporaryDirectory, "data", application.Name, "sqlite")}:/app/data`,
+    );
+    expect(inspect.Config.Labels?.piploy_configHash).toBe(
+      getContainerConfigHash({
+        environmentVariables: ["DATABASE_PATH=/app/data/app.db"],
+        volumes: [
+          `${path.join(temporaryDirectory, "data", application.Name, "sqlite")}:/app/data`,
+        ],
+      }),
     );
     expect(await docker.ensureContainerRunning(application, commit)).toEqual({
       wasCreated: false,

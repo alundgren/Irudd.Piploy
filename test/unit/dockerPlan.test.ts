@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  getContainerConfigHash,
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
@@ -23,6 +24,8 @@ describe("planImage", () => {
 });
 
 describe("planContainer", () => {
+  const configHash = getContainerConfigHash({});
+
   it.each([
     [undefined, { action: "recreate" }],
     [
@@ -36,15 +39,21 @@ describe("planContainer", () => {
   ] as const)(
     "recreates when the current container is not usable",
     (container, expected) => {
-      expect(planContainer(container, "commit")).toEqual(expected);
+      expect(planContainer(container, "commit", configHash)).toEqual(expected);
     },
   );
 
   it("reuses a running container at the requested commit", () => {
     expect(
       planContainer(
-        { id: "container", state: "running", gitTipCommit: "commit" },
+        {
+          id: "container",
+          state: "running",
+          gitTipCommit: "commit",
+          configHash,
+        },
         "commit",
+        configHash,
       ),
     ).toEqual({ action: "reuse", containerId: "container" });
   });
@@ -52,10 +61,57 @@ describe("planContainer", () => {
   it("starts an exited container at the requested commit", () => {
     expect(
       planContainer(
-        { id: "container", state: "exited", gitTipCommit: "commit" },
+        {
+          id: "container",
+          state: "exited",
+          gitTipCommit: "commit",
+          configHash,
+        },
         "commit",
+        configHash,
       ),
     ).toEqual({ action: "start", containerId: "container" });
+  });
+
+  it("recreates a container when its runtime configuration changes", () => {
+    expect(
+      planContainer(
+        {
+          id: "container",
+          state: "running",
+          gitTipCommit: "commit",
+          configHash: getContainerConfigHash({
+            portMappings: [{ hostPort: 8080, containerPort: 80 }],
+          }),
+        },
+        "commit",
+        getContainerConfigHash({
+          portMappings: [{ hostPort: 9090, containerPort: 80 }],
+        }),
+      ),
+    ).toEqual({ action: "recreate", existingContainerId: "container" });
+  });
+
+  it("hashes equivalent runtime configurations identically", () => {
+    expect(
+      getContainerConfigHash({
+        environmentVariables: ["B=two", "A=one"],
+        volumes: ["cache:/cache", "data:/data"],
+        portMappings: [
+          { hostPort: 9090, containerPort: 90 },
+          { hostPort: 8080, containerPort: 80 },
+        ],
+      }),
+    ).toBe(
+      getContainerConfigHash({
+        environmentVariables: ["A=one", "B=two"],
+        volumes: ["data:/data", "cache:/cache"],
+        portMappings: [
+          { hostPort: 8080, containerPort: 80 },
+          { hostPort: 9090, containerPort: 90 },
+        ],
+      }),
+    );
   });
 });
 
