@@ -4,6 +4,7 @@ import path from "node:path";
 import Dockerode from "dockerode";
 
 import {
+  getContainerConfigHash,
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
@@ -17,6 +18,7 @@ import { getApplicationRepoDirectory } from "./settings.js";
 const piploy = "piploy";
 const imageAppLabelName = `${piploy}_appName`;
 const imageCommitLabelName = `${piploy}_gitTipCommit`;
+const containerConfigLabelName = `${piploy}_configHash`;
 const testMarkerLabelName = `${piploy}_isCreatedByTest`;
 
 export interface GitCommit {
@@ -107,6 +109,7 @@ function asDockerContainer(
     id: container.Id,
     state: container.State,
     gitTipCommit: container.Labels[imageCommitLabelName],
+    configHash: container.Labels[containerConfigLabelName],
   };
 }
 
@@ -246,9 +249,13 @@ export function createDockerService(
   ): Promise<EnsureContainerResult> {
     const containerName = getContainerName(application);
     const existingContainer = await findContainer(containerName);
+    const configHash = getContainerConfigHash({
+      portMappings: application.PortMappings,
+    });
     const containerPlan = planContainer(
       existingContainer ? asDockerContainer(existingContainer) : undefined,
       commit.hash,
+      configHash,
     );
 
     if (containerPlan.action === "reuse") {
@@ -289,6 +296,7 @@ export function createDockerService(
       name: containerName,
       ExposedPorts: exposedPorts,
       HostConfig: { PortBindings: portBindings, AutoRemove: true },
+      Labels: { [containerConfigLabelName]: configHash },
     });
     try {
       logger.info(`Starting container ${containerName}`);

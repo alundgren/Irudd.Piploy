@@ -115,7 +115,7 @@ describe("daemon", () => {
       {
         poll: async () => {
           polls += 1;
-          if (polls === 1) await firstPoll;
+          if (polls === 2) await firstPoll;
         },
         getStatus: async () => ({ applications: [] }),
         attemptSelfUpdate: async () => "up-to-date",
@@ -137,7 +137,7 @@ describe("daemon", () => {
     releaseFirstPoll!();
     await expect(first).resolves.toEqual({ ok: true });
     await expect(second).resolves.toEqual({ ok: true });
-    expect(polls).toBe(2);
+    expect(polls).toBe(3);
   });
 
   it("rejects malformed requests", async () => {
@@ -205,9 +205,27 @@ describe("daemon", () => {
       });
       daemons.push(daemon);
 
+      await vi.advanceTimersByTimeAsync(0);
+      events.length = 0;
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(events).toEqual(expectedEvents);
     },
   );
+
+  it("enqueues a poll immediately on startup without self-updating", async () => {
+    const events: string[] = [];
+    await start({
+      attemptSelfUpdate: async () => {
+        events.push("update");
+        return "up-to-date";
+      },
+      poll: async () => {
+        events.push("poll");
+      },
+      getStatus: async () => ({ applications: [] }),
+    });
+
+    await vi.waitFor(() => expect(events).toEqual(["poll"]));
+  });
 });

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface DockerImage {
   id: string;
 }
@@ -6,6 +8,16 @@ export interface DockerContainer {
   id: string;
   state: string;
   gitTipCommit?: string;
+  configHash?: string;
+}
+
+export interface ContainerConfiguration {
+  environmentVariables?: readonly string[];
+  volumes?: readonly string[];
+  portMappings?: readonly {
+    hostPort: number;
+    containerPort: number;
+  }[];
 }
 
 export type ImagePlan =
@@ -38,12 +50,16 @@ export function planImage(existingImage?: DockerImage): ImagePlan {
 export function planContainer(
   existingContainer: DockerContainer | undefined,
   gitTipCommit: string,
+  configHash: string,
 ): ContainerPlan {
   if (!existingContainer) {
     return { action: "recreate" };
   }
 
-  if (existingContainer.gitTipCommit === gitTipCommit) {
+  if (
+    existingContainer.gitTipCommit === gitTipCommit &&
+    existingContainer.configHash === configHash
+  ) {
     if (existingContainer.state === "running") {
       return { action: "reuse", containerId: existingContainer.id };
     }
@@ -53,6 +69,28 @@ export function planContainer(
   }
 
   return { action: "recreate", existingContainerId: existingContainer.id };
+}
+
+/**
+ * Produces a stable identity for the settings which affect a container at
+ * runtime. Arrays are sorted because their configuration order is not
+ * meaningful to Docker.
+ */
+export function getContainerConfigHash(
+  configuration: ContainerConfiguration,
+): string {
+  const normalized = {
+    environmentVariables: [
+      ...(configuration.environmentVariables ?? []),
+    ].sort(),
+    volumes: [...(configuration.volumes ?? [])].sort(),
+    portMappings: [...(configuration.portMappings ?? [])].sort(
+      (left, right) =>
+        left.hostPort - right.hostPort ||
+        left.containerPort - right.containerPort,
+    ),
+  };
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
 /** Converts the config setting into a Docker build context and its Dockerfile. */
