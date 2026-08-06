@@ -11,8 +11,15 @@ letters, numbers, underscores, and hyphens. Port mappings are validated as
 `<hostPort>:<containerPort>` and converted to typed port pairs while the
 configuration is parsed. Volumes are validated as
 `<name>:/container/path` and likewise converted to typed names and container
-paths; host paths and `..` are rejected. Environment variables are passed to
-Docker verbatim, without interpolation.
+paths; host paths, `..`, the container root, a second colon — which Docker
+would read as mount options — and two Volumes of one Application sharing a
+container path are all rejected. Environment variables are passed to Docker
+verbatim, without interpolation.
+
+`RootDirectory` is rejected when it overlaps the data directory in either
+direction, because `wipeall` deletes `RootDirectory` recursively and
+Application data must survive it (see
+[ADR-0005](0005-application-state-and-volume-model.md)).
 
 The daemon reads and validates configuration once at startup. Restart Piploy
 after changing `piploy.json`.
