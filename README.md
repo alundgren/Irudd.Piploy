@@ -104,7 +104,12 @@ node piploy.cjs status
 
 ## Deploying a release
 
-Tag and push the release:
+In GitHub, run the **Release** workflow from the Actions page and enter the
+version (with or without a leading `v`). It runs the release checks against the
+current default branch, then creates an annotated `vX.Y.Z` tag and publishes
+the release.
+
+To create a release from the command line, tag and push it instead:
 
 ```bash
 git tag vX.Y.Z
