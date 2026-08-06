@@ -27,6 +27,7 @@ function createDeps(): CommandDeps {
     computeStatusInline: vi.fn(async () => daemonStatus),
     pollInline: vi.fn(),
     wipeAll: vi.fn(),
+    getPreservedApplicationDataDirectories: vi.fn(() => []),
     startDaemon: vi.fn(async () => ({
       socketPath: "/tmp/piploy.sock",
       stop: vi.fn(),
@@ -137,12 +138,18 @@ describe("commands", () => {
 
   it("wipes without contacting the daemon", async () => {
     const deps = createDeps();
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    deps.getPreservedApplicationDataDirectories = vi.fn(() => [
+      "/opt/piploy/data/app",
+    ]);
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await wipeAll(deps);
 
     expect(deps.wipeAll).toHaveBeenCalledOnce();
     expect(deps.requestDaemon).not.toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith(
+      "Preserved application data: /opt/piploy/data/app",
+    );
   });
 
   it("starts the daemon", async () => {

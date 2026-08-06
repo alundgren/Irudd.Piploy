@@ -40,7 +40,8 @@ These steps install Piploy on a new Pi. They assume the service user is
    ├── piploy.cjs       # deployed bundle
    ├── piploy.cjs.prev  # rollback copy, created after the first self-update
    ├── piploy.json      # configuration; deployments never overwrite it
-   └── root/             # application repositories and logs
+   ├── root/             # application repositories and logs
+   └── data/             # persistent application data; Piploy never deletes it
    ```
 
 4. Create `/etc/systemd/system/piploy.service`:
@@ -90,7 +91,7 @@ reach it. Another user gets the offline fallback described under `status`.
 | `poll` | Runs one reconciliation now instead of waiting for the poll timer. |
 | `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up. |
 | `service-stop` | Asks the running daemon to shut down. |
-| `wipeall` | Removes all Piploy containers and images and deletes the root directory. Destructive. |
+| `wipeall` | Removes all Piploy containers and images and deletes the root directory. Application data is preserved and its paths are printed. |
 | `self-update` | Checks GitHub for a newer release and installs it. |
 | `--version` | Prints the running bundle's version. |
 | `--help` | Lists the commands. |

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import Dockerode from "dockerode";
@@ -13,7 +13,7 @@ import {
 } from "./dockerPlan.js";
 import type { Logger } from "./logger.js";
 import type { Application, PiploySettings } from "./settings.js";
-import { getApplicationRepoDirectory } from "./settings.js";
+import { getApplicationRepoDirectory, getVolumeDirectory } from "./settings.js";
 
 const piploy = "piploy";
 const imageAppLabelName = `${piploy}_appName`;
@@ -249,7 +249,16 @@ export function createDockerService(
   ): Promise<EnsureContainerResult> {
     const containerName = getContainerName(application);
     const existingContainer = await findContainer(containerName);
+    const binds = (application.Volumes ?? []).map(
+      (volume) =>
+        `${getVolumeDirectory(application, volume)}:${volume.containerPath}`,
+    );
+    const environment = Object.entries(
+      application.EnvironmentVariables ?? {},
+    ).map(([name, value]) => `${name}=${value}`);
     const configHash = getContainerConfigHash({
+      environmentVariables: environment,
+      volumes: binds,
       portMappings: application.PortMappings,
     });
     const containerPlan = planContainer(
@@ -290,12 +299,21 @@ export function createDockerService(
       exposedPorts[port] = {};
     }
 
+    for (const volume of application.Volumes ?? []) {
+      mkdirSync(getVolumeDirectory(application, volume), { recursive: true });
+    }
+
     logger.info(`Creating container ${containerName}`);
     const createdContainer = await docker.createContainer({
       Image: getImageVersionTagCommit(application.Name, commit),
       name: containerName,
+      Env: environment,
       ExposedPorts: exposedPorts,
-      HostConfig: { PortBindings: portBindings, AutoRemove: true },
+      HostConfig: {
+        PortBindings: portBindings,
+        Binds: binds,
+        AutoRemove: true,
+      },
       Labels: { [containerConfigLabelName]: configHash },
     });
     try {

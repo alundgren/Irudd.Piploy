@@ -1,11 +1,16 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  getApplicationDataDirectory,
   getApplicationRepoDirectory,
   getApplicationRootDirectory,
+  getDataDirectory,
+  getVolumeDirectory,
   loadSettings,
   parseSettings,
   resolveBundleDirectory,
@@ -22,6 +27,23 @@ const validApplication = {
   GitRepositoryUrl: "https://github.com/example/app1.git",
   DockerfilePath: "Dockerfile",
 };
+
+/** Writes a piploy.json whose RootDirectory is relative to its own directory. */
+async function writeConfig(relativeRootDirectory: string): Promise<string> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-settings-"));
+  const configPath = path.join(directory, "piploy.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      Piploy: {
+        RootDirectory: path.join(directory, relativeRootDirectory),
+        Applications: [validApplication],
+      },
+    }),
+    "utf8",
+  );
+  return configPath;
+}
 
 describe("loadSettings", () => {
   it("reads and validates a valid piploy.json fixture", () => {
@@ -41,6 +63,25 @@ describe("loadSettings", () => {
       IsTestRun: false,
     });
   });
+
+  it.each(["", "data", "data/app1"])(
+    "rejects a RootDirectory that overlaps the data directory ('%s')",
+    async (relativeRootDirectory) => {
+      const configPath = await writeConfig(relativeRootDirectory);
+
+      expect(() => loadSettings(configPath)).toThrow(
+        "overlaps the application data directory",
+      );
+    },
+  );
+
+  it("accepts a RootDirectory beside the data directory", async () => {
+    const configPath = await writeConfig("root");
+
+    expect(loadSettings(configPath).RootDirectory).toBe(
+      path.join(path.dirname(configPath), "root"),
+    );
+  });
 });
 
 describe("parseSettings", () => {
@@ -55,6 +96,8 @@ describe("parseSettings", () => {
     expect(settings.MinutesBetweenBackgroundPolls).toBeUndefined();
     expect(settings.IsTestRun).toBeUndefined();
     expect(settings.Applications[0]?.PortMappings).toBeUndefined();
+    expect(settings.Applications[0]?.Volumes).toBeUndefined();
+    expect(settings.Applications[0]?.EnvironmentVariables).toBeUndefined();
   });
 
   it("rejects a config missing the Piploy wrapper key", () => {
@@ -111,6 +154,69 @@ describe("parseSettings", () => {
       { hostPort: 9090, containerPort: 90 },
     ]);
   });
+
+  it.each([
+    "sqlite",
+    "sqlite:relative/path",
+    "/host/path:/container/path",
+    "../host:/container/path",
+    "sqlite:/container/../path",
+    "sqlite:/app/data:ro",
+    "sqlite:/app/data:/etc",
+    "sqlite:/",
+    "sqlite://",
+  ])("rejects an unsafe volume mapping %s", (volume) => {
+    expect(() =>
+      parseSettings({
+        Piploy: {
+          RootDirectory: "/root",
+          Applications: [{ ...validApplication, Volumes: [volume] }],
+        },
+      }),
+    ).toThrow(
+      "Invalid volumes. Must have the format <name>:/container/path; host paths, mount options, and '..' are not allowed",
+    );
+  });
+
+  it("rejects two volumes sharing a container path", () => {
+    expect(() =>
+      parseSettings({
+        Piploy: {
+          RootDirectory: "/root",
+          Applications: [
+            {
+              ...validApplication,
+              Volumes: ["sqlite:/app/data", "uploads:/app/data"],
+            },
+          ],
+        },
+      }),
+    ).toThrow(
+      "Invalid volumes. Two Volumes of one Application cannot share a container path",
+    );
+  });
+
+  it("parses volumes and environment variables without interpolation", () => {
+    const settings = parseSettings({
+      Piploy: {
+        RootDirectory: "/root",
+        Applications: [
+          {
+            ...validApplication,
+            Volumes: ["sqlite:/app/data"],
+            EnvironmentVariables: { DATABASE_PATH: "/app/data/app.db" },
+          },
+        ],
+      },
+    });
+
+    expect(settings.Applications[0]?.Volumes).toEqual([
+      { name: "sqlite", containerPath: "/app/data" },
+    ]);
+    expect(settings.Applications[0]?.EnvironmentVariables).toEqual({
+      DATABASE_PATH: "/app/data/app.db",
+    });
+  });
 });
 
 describe("resolveConfigPath", () => {
@@ -159,5 +265,38 @@ describe("application directories", () => {
     expect(getApplicationRepoDirectory(settings, application)).toBe(
       "/opt/piploy/root/app1/repo",
     );
+  });
+
+  it("derives data directories next to the active configuration", () => {
+    const originalConfigPath = process.env.PIPLOY_CONFIG;
+    process.env.PIPLOY_CONFIG = "/opt/piploy/piploy.json";
+    try {
+      const application = parseSettings({
+        Piploy: { RootDirectory: "/ignored", Applications: [validApplication] },
+      }).Applications[0]!;
+      const volume = { name: "sqlite", containerPath: "/app/data" };
+
+      expect(getDataDirectory()).toBe("/opt/piploy/data");
+      expect(getApplicationDataDirectory(application)).toBe(
+        "/opt/piploy/data/app1",
+      );
+      expect(getVolumeDirectory(application, volume)).toBe(
+        "/opt/piploy/data/app1/sqlite",
+      );
+    } finally {
+      if (originalConfigPath === undefined) delete process.env.PIPLOY_CONFIG;
+      else process.env.PIPLOY_CONFIG = originalConfigPath;
+    }
+  });
+
+  it("keeps the data directory absolute for a relative configuration path", () => {
+    const originalConfigPath = process.env.PIPLOY_CONFIG;
+    process.env.PIPLOY_CONFIG = "piploy.json";
+    try {
+      expect(getDataDirectory()).toBe(path.resolve(process.cwd(), "data"));
+    } finally {
+      if (originalConfigPath === undefined) delete process.env.PIPLOY_CONFIG;
+      else process.env.PIPLOY_CONFIG = originalConfigPath;
+    }
   });
 });
