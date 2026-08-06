@@ -33,8 +33,9 @@ export interface GitFixtureRemote {
 
 /**
  * Serves a real git repository over local smart HTTP (git-upload-pack/git-receive-pack),
- * matching isomorphic-git's own test suite approach — isomorphic-git speaks HTTP(S) only
- * (docs/research/ts-git-library.md), so a plain local-directory remote can't be cloned.
+ * matching isomorphic-git's own test-suite approach. The production client
+ * communicates with remotes over HTTP(S), so a plain local-directory remote
+ * cannot exercise the clone path.
  */
 export async function startGitFixtureRemote(): Promise<GitFixtureRemote> {
   const root = mkdtempSync(path.join(os.tmpdir(), "piploy-git-fixture-"));

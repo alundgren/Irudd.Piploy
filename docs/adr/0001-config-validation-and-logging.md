@@ -1,7 +1,31 @@
-# Config validation and logging for the TypeScript port
+# Configuration validation and logging
 
-**Config.** `piploy.json` is validated with **zod**, keeping the `Piploy` wrapper key and every field name byte-identical to the C# shape (`RootDirectory`, `Applications[].Name`/`GitRepositoryUrl`/`DockerfilePath`/`PortMappings`, `MinutesBetweenBackgroundPolls`, `IsTestRun`) so the Pi's existing file keeps working across the cutover. `PortMappings` strings are parsed into typed `{hostPort, containerPort}` pairs as part of schema validation, not lazily on use. The file is read once at daemon startup, matching the original's non-reloading `Host` config binding; picking up an edited `piploy.json` requires a restart.
+## Decision
 
-**Logging.** We use **pino**, with its child-logger context (`logger.child({ application, operation, gitRepository })`) replacing the C# `BeginScope` pattern. Despite pino being JSON-native, log lines are written in **human-readable text** (`timestamp [key=value, ...] message`) via a custom formatter, not structured JSON — there is no dashboard or log-tooling consuming these logs (settled in [#3](https://github.com/alundgren/Irudd.Piploy/issues/3)), and the actual workflow is SSH + tailing the file. This is a deliberate deviation from pino's default output; don't "fix" it back to JSON without revisiting that reasoning.
+`piploy.json` is Piploy's supported configuration contract. It contains a
+top-level `Piploy` object with `RootDirectory`, `Applications`, optional
+`MinutesBetweenBackgroundPolls`, and optional `IsTestRun`. Each application
+has `Name`, `GitRepositoryUrl`, `DockerfilePath`, and optional `PortMappings`.
+Names may contain letters, numbers, underscores, and hyphens. Port mappings
+are validated as `<hostPort>:<containerPort>` and converted to typed port
+pairs while the configuration is parsed.
 
-The rotating file keeps the original's exact retention policy — one file per ISO week (`piploy-log-<year>-<week>.txt`), older files deleted on write — reimplemented by hand rather than delegated to a rotation library, so behavior on the Pi is unchanged. Docker build progress logs per-event at `debug` (silent by default) with a single `info`-level summary line on completion, so normal operation doesn't drown the file; raising the log level restores full progress detail for troubleshooting.
+The daemon reads and validates configuration once at startup. Restart Piploy
+after changing `piploy.json`.
+
+Piploy uses pino for level filtering and contextual child loggers. It writes
+human-readable text lines in the form `timestamp [key=value, ...] message`;
+the expected operator workflow is SSH access and reading the log file. Docker
+build progress is logged at `debug`, with one `info` summary when a build
+completes.
+
+Logs live in `<RootDirectory>/logs`. Piploy keeps one file for the current
+Monday-first calendar week, named `piploy-log-<year>-<week>.txt`, and removes
+older Piploy log files when it writes a line. Week 1 begins on January 1; this
+is intentionally not ISO 8601 week numbering.
+
+## Consequences
+
+Configuration errors fail at startup instead of surfacing later during a
+deployment. Log files are compact and directly readable, but changing the log
+format or retention policy requires an explicit compatibility decision.

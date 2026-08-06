@@ -19,9 +19,8 @@ Single-context — `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agen
 ## Implementation context
 
 Piploy is implemented in TypeScript under `src/`. Before changing behavior
-around git, Docker, configuration, or deployment, check
-[issue #1](https://github.com/alundgren/Irudd.Piploy/issues/1) and the
-relevant ADRs for the project's settled decisions.
+around git, Docker, configuration, or deployment, check the relevant ADRs and
+the current source documentation for the project's settled decisions.
 
 ## Shared-agent Git workflow
 

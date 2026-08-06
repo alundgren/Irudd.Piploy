@@ -47,18 +47,17 @@ async function readGitCommit(
   const { commit } = await git.readCommit({ fs, dir: repoDirectory, oid });
   return {
     hash: oid,
-    // committer.timestamp is UTC epoch seconds; committer.timezoneOffset is
-    // minutes and sign-inverted relative to ISO 8601, so it's not safe to
-    // combine with timestamp (see docs/research/ts-git-library.md).
+    // committer.timestamp is a UTC epoch timestamp. The timezone offset is
+    // not needed to represent this instant and has the opposite ISO 8601 sign.
     date: new Date(commit.committer.timestamp * 1000),
     message: commit.message.trimEnd(),
   };
 }
 
 /**
- * Composes `git reset --hard <oid>` from writeRef + checkout, proven
- * byte-identical including the index (docs/research/ts-git-library.md).
- * Not exported: no caller may run half of it.
+ * Composes `git reset --hard <oid>` from `writeRef` and `checkout`. Keeping
+ * the composition private makes the reset atomic from callers' perspective;
+ * integration tests cover the resulting worktree and index state.
  */
 async function resetHard(
   repoDirectory: string,

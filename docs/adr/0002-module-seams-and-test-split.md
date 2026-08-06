@@ -1,25 +1,49 @@
-# Module seams and the unit/integration test split for the TypeScript port
+# Module seams and the unit/integration test split
 
-**Docker gets a pure/impure split; git does not.** `PiployDockerService`'s `EnsureImageExists`/`EnsureContainerRunning` interleave I/O with real decision logic — given a commit and the existing image/container state, decide `reuse`, `build`, `start`, or `recreate`. That policy moves into a pure module, **`dockerPlan.ts`** (`planImage`, `planContainer`), taking and returning plain data with no Docker client and no async — unit-tested directly with plain objects. A **`docker.ts`** adapter wraps `dockerode`, calling into `dockerPlan` internally, and keeps the same deep interface callers see today (`ensureImageExists`, `ensureContainerRunning`, plus the cleanup operations from `PiployDockerCleanupService`: `cleanupInactive`/`cleanupAll`/`cleanupTestCreated`). The split is internal to the module — nothing about calling it changes. `PiployGitService` has no equivalent pure core: clone/fetch/reset/read-tip is all I/O, including the composed `resetHard()` (`writeRef` + `checkout`, proven byte-identical in the [git library research](https://github.com/alundgren/Irudd.Piploy/blob/main/docs/research/ts-git-library.md)) — folded invisibly into `ensureLocalRepository` rather than pulled out as its own unit. `git.ts` stays a single deep module, provable only against a real remote, and lives entirely in `test:integration`.
+## Decision
 
-**No injected git/docker "port" for production code.** There is exactly one real adapter for each (isomorphic-git or its non-HTTPS fallback per [#14](https://github.com/alundgren/Irudd.Piploy/issues/14); dockerode) and nothing ever swaps a second implementation in — introducing a `GitPort`/`DockerPort` interface there would fake something with no real alternative to fake for, testing the fake rather than anything real. `orchestrator.ts` (the `poll()` loop) is the one exception: it takes a narrow, orchestrator-specific `OrchestratorDeps` interface (`ensureLocalRepository`, `getLatestCommit`, `ensureImageExists`, `ensureContainerRunning`, `cleanupInactive`) purely so the orchestration *sequencing* is unit-testable with an in-memory fake, even though production always wires in the one real `git.ts`/`docker.ts`. `status.ts` gets the same pure-extraction treatment as `dockerPlan` — the "is this app running the latest version" comparison (`PiployService.cs:54-56`) becomes a pure function over already-fetched git/docker state, unit-tested the same way.
+`dockerPlan.ts` contains the pure Docker decision policy. Given image or
+container state and a Git commit, `planImage` and `planContainer` select
+`reuse`, `build`, `start`, or `recreate`; unit tests exercise these functions
+with plain values. `docker.ts` is the I/O adapter around dockerode and applies
+that policy while also handling cleanup.
 
-**Per-application poll failures are isolated — a deliberate deviation from dotnet parity.** `PiployService.Poll` has no try/catch around its per-application loop today: an exception in application 2 of 3 stops application 3 from being polled at all. The port changes this: `orchestrator.ts` catches and logs a failure per application and continues to the next, with cleanup still running unconditionally at the end of the cycle. This is called out explicitly because the map's destination otherwise commits to matching dotnet behavior; this one piece does not.
+Git operations remain a deep adapter in `git.ts`: cloning, fetching, resolving
+the branch and tip, and resetting the checkout all require a repository. A
+hard reset is composed privately from `writeRef` and `checkout`, so callers
+only observe a completed reset. Integration tests with a real HTTP Git remote
+verify this behavior.
 
-**The daemon's queue admit/reject/drop policy is pure and unit-tested; the timer that feeds it is not.** [#9](https://github.com/alundgren/Irudd.Piploy/issues/9) settled the bounded-queue-plus-serial-worker shape, fed by both client requests and an internal poll-timer tick, with different drop behavior for each. That decision logic — given the queue's current state and an incoming item, decide enqueue / reject-busy / drop-silently — is its own pure module, tested the same way as `dockerPlan`. The `setInterval` scheduling loop that produces timer ticks stays thin, untested glue; a narrow test using Vitest's `vi.useFakeTimers` may prove the interval wiring fires, but the policy itself needs no fake timers at all.
+Production uses one Git adapter and one Docker adapter. The orchestrator is
+the only dependency seam: `OrchestratorDeps` exposes just the operations that
+`poll()` sequences, allowing its ordering and error handling to be unit-tested
+with an in-memory fake. `status.ts` is also pure, comparing already-fetched
+Git and Docker state to determine whether an application runs the remote tip.
 
-**`piploy_isCreatedByTest` carries over unchanged.** The label-based test-isolation marker — and `test:integration`'s use of `cleanupTestCreated` for setup/teardown against a real daemon on a dev machine that may have other, unrelated containers running — is a straight port of `TestBase.cs`'s pattern, not redesigned.
+Failures for one application are logged and do not stop the rest of a poll.
+Cleanup always runs after the application loop. The daemon queue's
+admit/reject/drop policy is a pure, unit-tested decision; the interval that
+submits poll ticks is thin scheduling glue. Client requests may be rejected
+when the queue is busy, while timer ticks may be dropped silently.
 
-**Module layout:**
+`piploy_isCreatedByTest` labels containers and images created by integration
+tests. Test setup and teardown use `cleanupTestCreated`, keeping unrelated
+containers on a developer machine out of test cleanup.
 
-| Module | Depth | Test coverage |
+## Module layout
+
+| Module | Boundary | Test coverage |
 |---|---|---|
-| `git.ts` | deep — clone/fetch/reset/read-tip, no pure core | `test:integration` only |
-| `dockerPlan.ts` | pure — `planImage`, `planContainer` | `test` (unit) |
-| `docker.ts` | deep — wraps dockerode + `dockerPlan`; same `ensureImageExists`/`ensureContainerRunning` interface, plus cleanup | `test:integration` for the adapter; unit coverage flows through `dockerPlan` |
-| `orchestrator.ts` | the `poll()` loop, takes `OrchestratorDeps` | `test` (unit, fakes injected) |
-| `status.ts` | pure — the "running the latest version" comparison | `test` (unit) |
-| `settings.ts` | config load/validate (zod, per [ADR-0001](https://github.com/alundgren/Irudd.Piploy/blob/main/docs/adr/0001-config-validation-and-logging.md)) | `test` (unit — pure validation) |
-| `commands.ts` / `cli.ts` | Commander wiring, calls orchestrator/status/daemon client | thin, no dedicated tests beyond existing stub coverage |
+| `git.ts` | clone, fetch, reset, and read commits against a remote | integration |
+| `dockerPlan.ts` | pure image and container policy | unit |
+| `docker.ts` | dockerode adapter and cleanup | integration, with policy covered by `dockerPlan` unit tests |
+| `orchestrator.ts` | poll sequencing through `OrchestratorDeps` | unit |
+| `status.ts` | pure running-version comparison | unit |
+| `settings.ts` | configuration loading and Zod validation | unit |
+| `commands.ts` / `cli.ts` | command wiring | thin existing coverage |
 
-This is a functional, TS-native layout rather than a class-per-service transliteration of the C# structure: modules are plain functions and structurally-typed data, not classes with constructor-injected dependencies. `piploy.json`'s shape is the one thing held byte-identical to the dotnet version; the code around it is not.
+## Consequences
+
+Unit tests focus on deterministic policy and sequencing. Integration tests
+cover behavior whose correctness depends on Git or Docker rather than on a
+substitute implementation.
