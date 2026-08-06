@@ -24,9 +24,8 @@ export interface Logger {
 const reservedKeys = new Set(["level", "time", "msg", "pid", "hostname"]);
 
 /**
- * .NET's `CalendarWeekRule.FirstDay` + Monday-first week, matching the ported
- * file's original rotation cadence exactly (not true ISO 8601, whose week 1
- * can start in the prior year).
+ * Uses a Monday-first week where week 1 begins on January 1. This is not ISO
+ * 8601: ISO week 1 can begin in the prior calendar year.
  */
 export function calendarWeekOfYear(date: Date): number {
   const year = date.getUTCFullYear();

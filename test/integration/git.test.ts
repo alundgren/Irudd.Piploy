@@ -1,4 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -79,6 +86,31 @@ describe("git", () => {
         "index.html",
       );
       expect(readFileSync(filePath, "utf8")).toBe("v2");
+    });
+
+    it("resets staged and unstaged local changes when moving forward", async () => {
+      remote.commit({ "index.html": "v1" }, "initial");
+      await ensureLocalRepository(settings, application, logger);
+
+      const repoDirectory = getApplicationRepoDirectory(settings, application);
+      writeFileSync(path.join(repoDirectory, "index.html"), "local change");
+      execFileSync("git", ["add", "index.html"], { cwd: repoDirectory });
+      writeFileSync(path.join(repoDirectory, "index.html"), "unstaged change");
+
+      remote.commit({ "index.html": "v2" }, "second");
+      await ensureLocalRepository(settings, application, logger);
+
+      expect(readFileSync(path.join(repoDirectory, "index.html"), "utf8")).toBe(
+        "v2",
+      );
+      expect(() =>
+        execFileSync("git", ["diff", "--quiet"], { cwd: repoDirectory }),
+      ).not.toThrow();
+      expect(() =>
+        execFileSync("git", ["diff", "--cached", "--quiet"], {
+          cwd: repoDirectory,
+        }),
+      ).not.toThrow();
     });
 
     it("is a no-op when the local repo is already up to date", async () => {
