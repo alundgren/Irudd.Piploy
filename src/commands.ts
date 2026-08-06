@@ -12,6 +12,7 @@ import {
 import { createDockerService } from "./docker.js";
 import type { Logger } from "./logger.js";
 import type { PiploySettings } from "./settings.js";
+import { getApplicationDataDirectory } from "./settings.js";
 import { piployVersion } from "./version.js";
 
 export interface CommandDeps {
@@ -19,6 +20,7 @@ export interface CommandDeps {
   computeStatusInline(): Promise<DaemonStatus>;
   pollInline(): Promise<void>;
   wipeAll(): Promise<void>;
+  getPreservedApplicationDataDirectories(): string[];
   startDaemon(): Promise<Daemon>;
 }
 
@@ -39,6 +41,10 @@ export function createCommandDeps(
         rmSync(settings.RootDirectory, { recursive: true, force: true });
       }
     },
+    getPreservedApplicationDataDirectories: () =>
+      settings.Applications.filter(
+        (application) => (application.Volumes?.length ?? 0) > 0,
+      ).map(getApplicationDataDirectory),
     startDaemon: () => startDaemon(settings, logger),
   };
 }
@@ -124,6 +130,9 @@ export async function serviceStop(deps: CommandDeps): Promise<void> {
 export async function wipeAll(deps: CommandDeps): Promise<void> {
   await deps.wipeAll();
   console.log("Removed all Piploy containers, images, and files.");
+  for (const directory of deps.getPreservedApplicationDataDirectories()) {
+    console.log(`Preserved application data: ${directory}`);
+  }
 }
 
 /** Starts the foreground daemon and lets SIGINT/SIGTERM stop it cleanly. */

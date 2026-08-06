@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  getApplicationDataDirectory,
   getApplicationRepoDirectory,
   getApplicationRootDirectory,
+  getDataDirectory,
+  getVolumeDirectory,
   loadSettings,
   parseSettings,
   resolveBundleDirectory,
@@ -55,6 +58,8 @@ describe("parseSettings", () => {
     expect(settings.MinutesBetweenBackgroundPolls).toBeUndefined();
     expect(settings.IsTestRun).toBeUndefined();
     expect(settings.Applications[0]?.PortMappings).toBeUndefined();
+    expect(settings.Applications[0]?.Volumes).toBeUndefined();
+    expect(settings.Applications[0]?.EnvironmentVariables).toBeUndefined();
   });
 
   it("rejects a config missing the Piploy wrapper key", () => {
@@ -111,6 +116,47 @@ describe("parseSettings", () => {
       { hostPort: 9090, containerPort: 90 },
     ]);
   });
+
+  it.each([
+    "sqlite",
+    "sqlite:relative/path",
+    "/host/path:/container/path",
+    "../host:/container/path",
+    "sqlite:/container/../path",
+  ])("rejects an unsafe volume mapping %s", (volume) => {
+    expect(() =>
+      parseSettings({
+        Piploy: {
+          RootDirectory: "/root",
+          Applications: [{ ...validApplication, Volumes: [volume] }],
+        },
+      }),
+    ).toThrow(
+      "Invalid volumes. Must have the format <name>:/container/path; host paths and '..' are not allowed",
+    );
+  });
+
+  it("parses volumes and environment variables without interpolation", () => {
+    const settings = parseSettings({
+      Piploy: {
+        RootDirectory: "/root",
+        Applications: [
+          {
+            ...validApplication,
+            Volumes: ["sqlite:/app/data"],
+            EnvironmentVariables: { DATABASE_PATH: "/app/data/app.db" },
+          },
+        ],
+      },
+    });
+
+    expect(settings.Applications[0]?.Volumes).toEqual([
+      { name: "sqlite", containerPath: "/app/data" },
+    ]);
+    expect(settings.Applications[0]?.EnvironmentVariables).toEqual({
+      DATABASE_PATH: "/app/data/app.db",
+    });
+  });
 });
 
 describe("resolveConfigPath", () => {
@@ -159,5 +205,27 @@ describe("application directories", () => {
     expect(getApplicationRepoDirectory(settings, application)).toBe(
       "/opt/piploy/root/app1/repo",
     );
+  });
+
+  it("derives data directories next to the active configuration", () => {
+    const originalConfigPath = process.env.PIPLOY_CONFIG;
+    process.env.PIPLOY_CONFIG = "/opt/piploy/piploy.json";
+    try {
+      const application = parseSettings({
+        Piploy: { RootDirectory: "/ignored", Applications: [validApplication] },
+      }).Applications[0]!;
+      const volume = { name: "sqlite", containerPath: "/app/data" };
+
+      expect(getDataDirectory()).toBe("/opt/piploy/data");
+      expect(getApplicationDataDirectory(application)).toBe(
+        "/opt/piploy/data/app1",
+      );
+      expect(getVolumeDirectory(application, volume)).toBe(
+        "/opt/piploy/data/app1/sqlite",
+      );
+    } finally {
+      if (originalConfigPath === undefined) delete process.env.PIPLOY_CONFIG;
+      else process.env.PIPLOY_CONFIG = originalConfigPath;
+    }
   });
 });

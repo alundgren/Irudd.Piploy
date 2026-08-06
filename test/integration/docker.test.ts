@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import Dockerode from "dockerode";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createDockerService } from "../../src/docker.js";
@@ -19,12 +21,16 @@ const logger: Logger = {
 const temporaryDirectory = await mkdtemp(
   path.join(os.tmpdir(), "piploy-docker-"),
 );
+const originalConfigPath = process.env.PIPLOY_CONFIG;
+process.env.PIPLOY_CONFIG = path.join(temporaryDirectory, "piploy.json");
 const applicationName = `integration${crypto.randomUUID().replaceAll("-", "")}`;
 const commit = { hash: crypto.randomUUID().replaceAll("-", "") };
 const application = {
   Name: applicationName,
   GitRepositoryUrl: "https://example.invalid/integration.git",
   DockerfilePath: "Dockerfile",
+  Volumes: [{ name: "sqlite", containerPath: "/app/data" }],
+  EnvironmentVariables: { DATABASE_PATH: "/app/data/app.db" },
 };
 const settings: PiploySettings = {
   RootDirectory: path.join(temporaryDirectory, "root"),
@@ -36,6 +42,8 @@ const docker = createDockerService(settings, logger);
 afterAll(async () => {
   await docker.cleanupTestCreated();
   await rm(temporaryDirectory, { recursive: true, force: true });
+  if (originalConfigPath === undefined) delete process.env.PIPLOY_CONFIG;
+  else process.env.PIPLOY_CONFIG = originalConfigPath;
 });
 
 describe("docker adapter", () => {
@@ -61,6 +69,18 @@ describe("docker adapter", () => {
 
     const started = await docker.ensureContainerRunning(application, commit);
     expect(started).toMatchObject({ wasCreated: true, wasStarted: true });
+    expect(
+      existsSync(
+        path.join(temporaryDirectory, "data", application.Name, "sqlite"),
+      ),
+    ).toBe(true);
+    const inspect = await new Dockerode()
+      .getContainer(started.containerId)
+      .inspect();
+    expect(inspect.Config.Env).toContain("DATABASE_PATH=/app/data/app.db");
+    expect(inspect.HostConfig.Binds).toContain(
+      `${path.join(temporaryDirectory, "data", application.Name, "sqlite")}:/app/data`,
+    );
     expect(await docker.ensureContainerRunning(application, commit)).toEqual({
       wasCreated: false,
       wasStarted: false,

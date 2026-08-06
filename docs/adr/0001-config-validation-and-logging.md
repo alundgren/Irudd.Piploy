@@ -5,10 +5,14 @@
 `piploy.json` is Piploy's supported configuration contract. It contains a
 top-level `Piploy` object with `RootDirectory`, `Applications`, optional
 `MinutesBetweenBackgroundPolls`, and optional `IsTestRun`. Each application
-has `Name`, `GitRepositoryUrl`, `DockerfilePath`, and optional `PortMappings`.
-Names may contain letters, numbers, underscores, and hyphens. Port mappings
-are validated as `<hostPort>:<containerPort>` and converted to typed port
-pairs while the configuration is parsed.
+has `Name`, `GitRepositoryUrl`, `DockerfilePath`, optional `PortMappings`,
+optional `Volumes`, and optional `EnvironmentVariables`. Names may contain
+letters, numbers, underscores, and hyphens. Port mappings are validated as
+`<hostPort>:<containerPort>` and converted to typed port pairs while the
+configuration is parsed. Volumes are validated as
+`<name>:/container/path` and likewise converted to typed names and container
+paths; host paths and `..` are rejected. Environment variables are passed to
+Docker verbatim, without interpolation.
 
 The daemon reads and validates configuration once at startup. Restart Piploy
 after changing `piploy.json`.

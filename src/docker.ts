@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import Dockerode from "dockerode";
@@ -12,7 +12,7 @@ import {
 } from "./dockerPlan.js";
 import type { Logger } from "./logger.js";
 import type { Application, PiploySettings } from "./settings.js";
-import { getApplicationRepoDirectory } from "./settings.js";
+import { getApplicationRepoDirectory, getVolumeDirectory } from "./settings.js";
 
 const piploy = "piploy";
 const imageAppLabelName = `${piploy}_appName`;
@@ -283,12 +283,26 @@ export function createDockerService(
       exposedPorts[port] = {};
     }
 
+    const binds = (application.Volumes ?? []).map((volume) => {
+      const volumeDirectory = getVolumeDirectory(application, volume);
+      mkdirSync(volumeDirectory, { recursive: true });
+      return `${volumeDirectory}:${volume.containerPath}`;
+    });
+    const environment = Object.entries(
+      application.EnvironmentVariables ?? {},
+    ).map(([name, value]) => `${name}=${value}`);
+
     logger.info(`Creating container ${containerName}`);
     const createdContainer = await docker.createContainer({
       Image: getImageVersionTagCommit(application.Name, commit),
       name: containerName,
+      Env: environment,
       ExposedPorts: exposedPorts,
-      HostConfig: { PortBindings: portBindings, AutoRemove: true },
+      HostConfig: {
+        PortBindings: portBindings,
+        Binds: binds,
+        AutoRemove: true,
+      },
     });
     try {
       logger.info(`Starting container ${containerName}`);
