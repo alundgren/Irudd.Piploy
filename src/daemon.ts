@@ -384,6 +384,7 @@ export async function startDaemon(
     () => void runTimerTick(),
     pollIntervalMinutes * 60_000,
   );
+  enqueue({ command: "poll" }, "timer");
   logger.info(`Daemon listening at ${socketPath}`);
 
   return {
