@@ -87,6 +87,12 @@ export async function status(deps: CommandDeps): Promise<void> {
     return;
   }
   if (!response.ok) {
+    if (response.reason === "poll-in-progress") {
+      console.log(`Piploy version: ${piployVersion}`);
+      console.log("Background service: running");
+      console.log("\nAn install is in progress. Try again shortly.");
+      return;
+    }
     commandFailed(`Daemon status request failed: ${response.reason}`);
     return;
   }

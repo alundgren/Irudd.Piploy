@@ -25,7 +25,10 @@ export type DaemonRequest =
 export type DaemonResponse =
   | { ok: true; status: DaemonStatus }
   | { ok: true }
-  | { ok: false; reason: "busy" | "invalid-request" | "failed" };
+  | {
+      ok: false;
+      reason: "busy" | "invalid-request" | "failed" | "poll-in-progress";
+    };
 
 export interface ApplicationDaemonStatus {
   application: string;
@@ -250,6 +253,7 @@ export async function startDaemon(
   const sockets = new Set<net.Socket>();
   let workerRunning = false;
   let stopping = false;
+  let pollInProgress = false;
   let shutdownPromise: Promise<void> | undefined;
 
   function shutdown(): Promise<void> {
@@ -269,7 +273,12 @@ export async function startDaemon(
       if (request.command === "stop") {
         return { ok: true };
       }
-      await deps.poll();
+      pollInProgress = true;
+      try {
+        await deps.poll();
+      } finally {
+        pollInProgress = false;
+      }
       return { ok: true };
     } catch (error) {
       logError(logger, error);
@@ -323,6 +332,10 @@ export async function startDaemon(
     request: DaemonRequest,
     respond: (response: DaemonResponse) => void,
   ): boolean {
+    if (request.command === "status" && pollInProgress) {
+      respond({ ok: false, reason: "poll-in-progress" });
+      return true;
+    }
     if (
       decideQueueAdmission(queue.length, queueCapacity, "client") !== "enqueue"
     ) {
