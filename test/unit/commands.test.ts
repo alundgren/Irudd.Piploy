@@ -82,6 +82,25 @@ describe("commands", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("reports an in-progress install without treating it as a failure", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: false as const,
+      reason: "poll-in-progress" as const,
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(deps.computeStatusInline).not.toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith(
+      "\nAn install is in progress. Try again shortly.",
+    );
+    expect(error).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("delegates poll to a reachable daemon", async () => {
     const deps = createDeps();
     deps.requestDaemon = vi.fn(async () => ({ ok: true as const }));

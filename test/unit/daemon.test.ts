@@ -140,6 +140,30 @@ describe("daemon", () => {
     expect(polls).toBe(3);
   });
 
+  it("answers status immediately with poll-in-progress instead of waiting behind a running poll", async () => {
+    let releasePoll: (() => void) | undefined;
+    const pollGate = new Promise<void>((resolve) => {
+      releasePoll = resolve;
+    });
+    const daemon = await start({
+      poll: async () => {
+        await pollGate;
+      },
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+
+    const poll = sendRequest(daemon.socketPath, { command: "poll" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await expect(
+      sendRequest(daemon.socketPath, { command: "status" }),
+    ).resolves.toEqual({ ok: false, reason: "poll-in-progress" });
+
+    releasePoll!();
+    await expect(poll).resolves.toEqual({ ok: true });
+  });
+
   it("rejects malformed requests", async () => {
     const daemon = await start({
       poll: async () => {},
