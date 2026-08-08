@@ -13,6 +13,12 @@ Application is never a group of containers — two containers means two
 Applications.
 _Avoid_: Service, app, stack, deployment
 
+**Register**:
+Bringing an Application into Piploy's configuration so Piploy starts keeping
+it running. An Application exists only once registered; nothing else creates
+one.
+_Avoid_: Add, install, onboard, provision, deploy
+
 **Poll**:
 One pass in which Piploy brings every Application's repository, image, and
 container back in line with the configuration. Polling is Piploy's only
@@ -40,5 +46,17 @@ Where Piploy keeps everything it cannot rebuild: Application data. Distinct
 from the root directory precisely because it is never deleted.
 
 **Bundle**:
-The single deployed file that is both the daemon and the command line client.
+The single installed file that is both the daemon and the command line client.
 _Avoid_: Binary, executable, artifact
+
+## Words from outside
+
+Words other people use that name nothing in this model. Never write them in
+our own docs, code, or commits — resolve them first.
+
+**Deploy**:
+Means one of two things: registering a new Application, or getting a newer
+commit of an existing one running. Resolve it against the configuration before
+acting — an Application that is absent must be registered; one that is present
+is already handled by the next Poll. It never means shipping a new Bundle;
+that is self-update.
