@@ -37,9 +37,9 @@ These steps install Piploy on a new Pi. They assume the service user is
 
    ```text
    /home/irudd/Piploy/
-   ├── piploy.cjs       # deployed bundle
+   ├── piploy.cjs       # installed bundle
    ├── piploy.cjs.prev  # rollback copy, created after the first self-update
-   ├── piploy.json      # configuration; deployments never overwrite it
+   ├── piploy.json      # configuration; self-update never overwrites it
    ├── root/             # application repositories and logs
    └── data/             # persistent application data; Piploy never deletes it
    ```
@@ -48,7 +48,7 @@ These steps install Piploy on a new Pi. They assume the service user is
 
    ```ini
    [Unit]
-   Description=Raspberry pi + docker deployment tool
+   Description=Raspberry Pi + Docker application runner
 
    [Service]
    WorkingDirectory=/home/irudd/Piploy
@@ -70,7 +70,7 @@ These steps install Piploy on a new Pi. They assume the service user is
 
 ## Running CLI commands
 
-The deployed bundle is both the daemon and the command line client:
+The installed bundle is both the daemon and the command line client:
 
 ```bash
 node piploy.cjs <command>
@@ -102,7 +102,7 @@ reach it. Another user gets the offline fallback described under `status`.
 node piploy.cjs status
 ```
 
-## Deploying a release
+## Publishing a release
 
 In GitHub, run the **Release** workflow from the Actions page and enter the
 version (with or without a leading `v`). It runs the release checks against the
@@ -121,7 +121,7 @@ The release workflow runs linting, tests, and the build, then attaches
 latest release on its poll timer. Within one
 `MinutesBetweenBackgroundPolls` interval, it downloads the bundle, swaps it
 into place, exits, and systemd starts the new version. No action on the Pi is
-needed for routine deploys.
+needed for routine releases.
 
 ## Rollback
 

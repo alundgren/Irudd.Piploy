@@ -19,7 +19,7 @@ Before calling Docker to build an application image, Piploy validates the
 resolved Dockerfile text. Every external `FROM` and `COPY --from` reference
 must be pinned to a SHA-256 digest and be either a Docker Official Image
 (`docker.io/library/*`, including short names) or a Microsoft .NET image
-(`mcr.microsoft.com/dotnet/*`). Piploy supports deploying .NET applications,
+(`mcr.microsoft.com/dotnet/*`). Piploy supports running .NET applications,
 so the Microsoft .NET namespace is an explicit application-image allowlist.
 `scratch` and earlier Docker build stages are not external references and
 remain valid. The validator collects every violation and prevents Docker from

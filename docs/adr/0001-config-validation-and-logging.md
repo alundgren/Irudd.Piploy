@@ -38,5 +38,5 @@ is intentionally not ISO 8601 week numbering.
 ## Consequences
 
 Configuration errors fail at startup instead of surfacing later during a
-deployment. Log files are compact and directly readable, but changing the log
+Poll. Log files are compact and directly readable, but changing the log
 format or retention policy requires an explicit compatibility decision.

@@ -1,6 +1,6 @@
 # An Application is exactly one container
 
-Deploying `life` raised the first real demand for a second container: the app
+Registering `life` raised the first real demand for a second container: the app
 talks to Ollama, and its Compose file runs the two side by side. Piploy keeps
 its existing shape instead — an Application is one Git repository that becomes
 one container — and Ollama runs natively on the Pi under its own systemd unit,

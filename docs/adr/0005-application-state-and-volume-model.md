@@ -1,7 +1,7 @@
 # Application state and the volume model
 
 Piploy needed persistent storage so an Application like `life` — a SQLite-backed
-planner — can survive having its container replaced on every deploy. An
+planner — can survive having its container replaced by a Poll. An
 Application declares Volumes as bare names (`"sqlite:/app/data"`), never host
 paths, and Piploy resolves each to a directory it creates itself under a data
 directory derived next to `piploy.json` — the same rule that already locates
