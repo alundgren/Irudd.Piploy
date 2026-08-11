@@ -9,8 +9,13 @@ const bundlePath = path.resolve("dist/piploy.cjs");
 const allowedModules = new Set(
   builtinModules.flatMap((moduleName) => [moduleName, `node:${moduleName}`]),
 );
+// A require preceded by a quote or backtick is source text a bundled library
+// generates for its own consumers (ajv emits `require("ajv/dist/runtime/...")`
+// into generated validators), not a require this bundle performs.
 const requiredModules = [
-  ...readFileSync(bundlePath, "utf8").matchAll(/\brequire\((["'])([^"']+)\1\)/g),
+  ...readFileSync(bundlePath, "utf8").matchAll(
+    /(?<!['"`])\brequire\((["'])([^"']+)\1\)/g,
+  ),
 ].map((match) => match[2]);
 const externalModules = [
   ...new Set(
