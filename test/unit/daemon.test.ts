@@ -1,4 +1,4 @@
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,7 @@ import {
   type DaemonResponse,
 } from "../../src/daemon.js";
 import type { Logger } from "../../src/logger.js";
-import type { PiploySettings } from "../../src/settings.js";
+import { loadSettings, type PiploySettings } from "../../src/settings.js";
 
 const settings: PiploySettings = {
   RootDirectory: "/tmp/piploy",
@@ -251,5 +251,172 @@ describe("daemon", () => {
     });
 
     await vi.waitFor(() => expect(events).toEqual(["poll"]));
+  });
+
+  describe("register", () => {
+    const newApplication = {
+      Name: "app",
+      GitRepositoryUrl: "https://example.com/app.git",
+      DockerfilePath: "Dockerfile",
+      PortMappings: ["8080:80"],
+    };
+
+    async function startWithConfig(
+      deps: DaemonDeps,
+      registered: unknown[] = [],
+    ): Promise<{
+      daemon: Daemon;
+      configPath: string;
+      liveSettings: PiploySettings;
+    }> {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-"));
+      const configPath = path.join(directory, "piploy.json");
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          Piploy: {
+            RootDirectory: path.join(directory, "root"),
+            Applications: registered,
+          },
+        }),
+      );
+      const liveSettings = loadSettings(configPath);
+      const daemon = await startDaemon(liveSettings, createLogger(), {
+        socketPath: path.join(directory, "piploy.sock"),
+        configPath,
+        pollIntervalMinutes: 60,
+        deps,
+      });
+      daemons.push(daemon);
+      return { daemon, configPath, liveSettings };
+    }
+
+    function idleDeps(): DaemonDeps {
+      return {
+        poll: async () => {},
+        getStatus: async () => ({ applications: [] }),
+        attemptSelfUpdate: async () => "up-to-date",
+      };
+    }
+
+    it("persists a new application, returns it transformed, and adds it to the live settings", async () => {
+      const { daemon, configPath, liveSettings } =
+        await startWithConfig(idleDeps());
+
+      await expect(
+        sendRequest(daemon.socketPath, {
+          command: "register",
+          application: newApplication,
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        application: {
+          Name: "app",
+          GitRepositoryUrl: "https://example.com/app.git",
+          DockerfilePath: "Dockerfile",
+          PortMappings: [{ hostPort: 8080, containerPort: 80 }],
+        },
+      });
+
+      // The file keeps the raw string form the schema parses, not the
+      // transformed port pairs.
+      const written = JSON.parse(await readFile(configPath, "utf8")) as {
+        Piploy: { Applications: unknown[] };
+      };
+      expect(written.Piploy.Applications).toEqual([newApplication]);
+      expect(liveSettings.Applications.map((one) => one.Name)).toEqual(["app"]);
+    });
+
+    it("rejects an application the schema does not accept", async () => {
+      const { daemon, configPath, liveSettings } =
+        await startWithConfig(idleDeps());
+
+      const response = await sendRequest(daemon.socketPath, {
+        command: "register",
+        application: { ...newApplication, PortMappings: ["not-a-mapping"] },
+      });
+
+      expect(response).toMatchObject({
+        ok: false,
+        reason: "invalid-application",
+      });
+      expect(liveSettings.Applications).toEqual([]);
+      const written = JSON.parse(await readFile(configPath, "utf8")) as {
+        Piploy: { Applications: unknown[] };
+      };
+      expect(written.Piploy.Applications).toEqual([]);
+    });
+
+    it("rejects an application whose name is already registered", async () => {
+      const { daemon, configPath } = await startWithConfig(idleDeps(), [
+        newApplication,
+      ]);
+
+      const response = await sendRequest(daemon.socketPath, {
+        command: "register",
+        application: { ...newApplication, PortMappings: ["9090:80"] },
+      });
+
+      expect(response).toMatchObject({
+        ok: false,
+        reason: "duplicate-application",
+      });
+      const written = JSON.parse(await readFile(configPath, "utf8")) as {
+        Piploy: { Applications: unknown[] };
+      };
+      expect(written.Piploy.Applications).toEqual([newApplication]);
+    });
+
+    it("does not poll", async () => {
+      let polls = 0;
+      const { daemon } = await startWithConfig({
+        ...idleDeps(),
+        poll: async () => {
+          polls += 1;
+        },
+      });
+      // The daemon polls once at startup; register must not add another.
+      await vi.waitFor(() => expect(polls).toBe(1));
+
+      await expect(
+        sendRequest(daemon.socketPath, {
+          command: "register",
+          application: newApplication,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(polls).toBe(1);
+    });
+
+    it("waits behind a poll that is already running", async () => {
+      let releasePoll: (() => void) | undefined;
+      const pollGate = new Promise<void>((resolve) => {
+        releasePoll = resolve;
+      });
+      const events: string[] = [];
+      const { daemon } = await startWithConfig({
+        ...idleDeps(),
+        poll: async () => {
+          await pollGate;
+          events.push("poll");
+        },
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const register = sendRequest(daemon.socketPath, {
+        command: "register",
+        application: newApplication,
+      }).then((response) => {
+        events.push("register");
+        return response;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(events).toEqual([]);
+
+      releasePoll!();
+      await expect(register).resolves.toMatchObject({ ok: true });
+      expect(events).toEqual(["poll", "register"]);
+    });
   });
 });

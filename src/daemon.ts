@@ -9,9 +9,12 @@ import { createOrchestrator } from "./orchestrator.js";
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
 import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
 import {
+  registerApplication,
+  RegisterApplicationError,
   resolveConfigPath,
   type Application,
   type PiploySettings,
+  type RegisterApplicationFailure,
 } from "./settings.js";
 import { isRunningLatestVersion } from "./status.js";
 
@@ -20,15 +23,20 @@ const defaultPollIntervalMinutes = 60;
 const socketProbeTimeoutMilliseconds = 750;
 
 export type DaemonRequest =
-  { command: "status" } | { command: "poll" } | { command: "stop" };
+  | { command: "status" }
+  | { command: "poll" }
+  | { command: "stop" }
+  | { command: "register"; application: unknown };
 
 export type DaemonResponse =
   | { ok: true; status: DaemonStatus }
+  | { ok: true; application: Application }
   | { ok: true }
   | {
       ok: false;
       reason: "busy" | "invalid-request" | "failed" | "poll-in-progress";
-    };
+    }
+  | { ok: false; reason: RegisterApplicationFailure; message: string };
 
 export interface ApplicationDaemonStatus {
   application: string;
@@ -49,6 +57,7 @@ export interface DaemonDeps {
 
 export interface DaemonOptions {
   socketPath?: string;
+  configPath?: string;
   queueCapacity?: number;
   pollIntervalMinutes?: number;
   deps?: DaemonDeps;
@@ -74,17 +83,19 @@ function getSocketPath(options: DaemonOptions): string {
 }
 
 function parseRequest(value: unknown): DaemonRequest | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("command" in value) ||
-    (value.command !== "status" &&
-      value.command !== "poll" &&
-      value.command !== "stop")
-  ) {
+  if (typeof value !== "object" || value === null || !("command" in value)) {
     return undefined;
   }
-  return { command: value.command };
+  const command = value.command;
+  if (command === "status" || command === "poll" || command === "stop") {
+    return { command };
+  }
+  // Only the envelope is checked here. The payload is validated once, by the
+  // Application schema, when the request runs.
+  if (command === "register" && "application" in value) {
+    return { command: "register", application: value.application };
+  }
+  return undefined;
 }
 
 function logError(logger: Logger, error: unknown): void {
@@ -248,6 +259,7 @@ export async function startDaemon(
     throw new Error("Daemon poll interval must be greater than zero");
   }
 
+  const configPath = options.configPath ?? resolveConfigPath();
   const deps = options.deps ?? createDaemonDeps(settings, logger);
   const queue: QueuedRequest[] = [];
   const sockets = new Set<net.Socket>();
@@ -265,21 +277,45 @@ export async function startDaemon(
     return shutdownPromise;
   }
 
+  /**
+   * Registering writes `piploy.json` and then appends to the very array the
+   * orchestrator re-reads on each poll, so the next poll picks the Application
+   * up (ADR-0007). It deliberately does not poll itself: polling is Piploy's
+   * only trigger, and nothing pushes work to it.
+   */
+  function runRegister(rawApplication: unknown): DaemonResponse {
+    try {
+      const application = registerApplication(configPath, rawApplication);
+      settings.Applications.push(application);
+      logger.info(`Registered application ${application.Name}`);
+      return { ok: true, application };
+    } catch (error) {
+      if (!(error instanceof RegisterApplicationError)) throw error;
+      logger.warn(`Rejected register request. ${error.message}`);
+      return { ok: false, reason: error.reason, message: error.message };
+    }
+  }
+
   async function runRequest(request: DaemonRequest): Promise<DaemonResponse> {
     try {
-      if (request.command === "status") {
-        return { ok: true, status: await deps.getStatus() };
+      // Every command is matched explicitly: a fallthrough here would run
+      // something other than what the client asked for.
+      switch (request.command) {
+        case "status":
+          return { ok: true, status: await deps.getStatus() };
+        case "stop":
+          return { ok: true };
+        case "register":
+          return runRegister(request.application);
+        case "poll":
+          pollInProgress = true;
+          try {
+            await deps.poll();
+          } finally {
+            pollInProgress = false;
+          }
+          return { ok: true };
       }
-      if (request.command === "stop") {
-        return { ok: true };
-      }
-      pollInProgress = true;
-      try {
-        await deps.poll();
-      } finally {
-        pollInProgress = false;
-      }
-      return { ok: true };
     } catch (error) {
       logError(logger, error);
       return { ok: false, reason: "failed" };

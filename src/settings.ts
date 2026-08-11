@@ -1,7 +1,15 @@
-import { readFileSync } from "node:fs";
+import {
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import { z } from "zod";
+
+import { isDuplicateApplicationName } from "./registerPolicy.js";
 
 const portMappingPattern = /^(\d+):(\d+)$/;
 // The container path is a plain absolute path: no colons, because Docker reads
@@ -38,7 +46,7 @@ const VolumeSchema = z.string().transform((value, ctx) => {
   return { name: match[1]!, containerPath: match[2]! };
 });
 
-const ApplicationSchema = z
+export const ApplicationSchema = z
   .object({
     Name: z.string().regex(/^[A-Za-z0-9_-]+$/),
     GitRepositoryUrl: z.string(),
@@ -85,6 +93,113 @@ export function loadSettings(configPath: string): PiploySettings {
   const settings = parseSettings(JSON.parse(raw));
   assertDataDirectoryIsSeparateFromRootDirectory(settings, configPath);
   return settings;
+}
+
+export type RegisterApplicationFailure =
+  "invalid-application" | "duplicate-application";
+
+/** A register request rejected on its own merits, not on an I/O failure. */
+export class RegisterApplicationError extends Error {
+  constructor(
+    readonly reason: RegisterApplicationFailure,
+    message: string,
+  ) {
+    super(message);
+    this.name = "RegisterApplicationError";
+  }
+}
+
+function describeValidationError(error: z.ZodError): string {
+  return error.issues
+    .map((issue) =>
+      issue.path.length > 0
+        ? `${issue.path.join(".")}: ${issue.message}`
+        : issue.message,
+    )
+    .join("; ");
+}
+
+/**
+ * Adds one Application to `piploy.json`. The raw input is what gets persisted:
+ * `PortMappings` and `Volumes` are strings on disk and only the parsed value is
+ * transformed, so writing the transformed Application back would produce a
+ * config the schema then rejects.
+ */
+export function registerApplication(
+  configPath: string,
+  rawApplication: unknown,
+): Application {
+  const parsed = ApplicationSchema.safeParse(rawApplication);
+  if (!parsed.success) {
+    throw new RegisterApplicationError(
+      "invalid-application",
+      describeValidationError(parsed.error),
+    );
+  }
+  const application = parsed.data;
+
+  const currentConfig = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+  // An invalid file here is a broken installation, not a bad request, so it
+  // propagates rather than becoming a register-specific rejection.
+  const currentSettings = parseSettings(currentConfig);
+  if (
+    isDuplicateApplicationName(currentSettings.Applications, application.Name)
+  ) {
+    throw new RegisterApplicationError(
+      "duplicate-application",
+      `An application named '${application.Name}' is already registered`,
+    );
+  }
+
+  const nextConfig = structuredClone(currentConfig) as {
+    Piploy: { Applications: unknown[] };
+  };
+  nextConfig.Piploy.Applications = [
+    ...nextConfig.Piploy.Applications,
+    rawApplication,
+  ];
+  try {
+    assertDataDirectoryIsSeparateFromRootDirectory(
+      parseSettings(nextConfig),
+      configPath,
+    );
+  } catch (error) {
+    throw new RegisterApplicationError(
+      "invalid-application",
+      error instanceof z.ZodError
+        ? describeValidationError(error)
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    );
+  }
+
+  writeConfigAtomically(configPath, nextConfig);
+  return application;
+}
+
+/**
+ * Writes the config through a temporary file in the same directory, so a crash
+ * mid-write leaves the previous `piploy.json` intact rather than a truncated
+ * one the daemon would refuse to start from.
+ */
+function writeConfigAtomically(configPath: string, config: unknown): void {
+  const temporaryPath = `${configPath}.tmp-${process.pid.toString()}`;
+  try {
+    writeFileSync(temporaryPath, JSON.stringify(config, null, 2) + "\n", {
+      // Keep whatever the operator set on the existing file: a rename replaces
+      // the inode, so the mode has to be carried over explicitly.
+      mode: statSync(configPath).mode & 0o777,
+    });
+    renameSync(temporaryPath, configPath);
+  } catch (error) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch {
+      // The temporary file was never created, or is already gone.
+    }
+    throw error;
+  }
 }
 
 function containsDirectory(directory: string, candidate: string): boolean {
