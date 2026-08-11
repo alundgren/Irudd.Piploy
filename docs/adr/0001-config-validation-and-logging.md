@@ -24,6 +24,15 @@ Application data must survive it (see
 The daemon reads and validates configuration once at startup. Restart Piploy
 after changing `piploy.json`.
 
+The one exception is `register`, which adds a single Application. It validates
+the payload, rejects a duplicate `Name`, re-validates the whole resulting
+configuration, writes `piploy.json` through a temporary file and a rename, and
+then adds the Application to the daemon's live configuration, so the next poll
+deploys it without a restart (see
+[ADR-0007](0007-live-config-mutation-for-register.md)). Every other change to
+`piploy.json` — editing or removing an Application, `RootDirectory`,
+`MinutesBetweenBackgroundPolls` — still requires a restart.
+
 Piploy uses pino for level filtering and contextual child loggers. It writes
 human-readable text lines in the form `timestamp [key=value, ...] message`;
 the expected operator workflow is SSH access and reading the log file. Docker
