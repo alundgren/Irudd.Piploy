@@ -5,6 +5,8 @@ import path from "node:path";
 import { createDockerService, type DockerStatus } from "./docker.js";
 import { getCommitStatus, type GitCommitStatus } from "./git.js";
 import type { Logger } from "./logger.js";
+import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
+import { getTailscaleAddress } from "./mcpTailscale.js";
 import { createOrchestrator } from "./orchestrator.js";
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
 import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
@@ -61,6 +63,8 @@ export interface DaemonOptions {
   queueCapacity?: number;
   pollIntervalMinutes?: number;
   deps?: DaemonDeps;
+  mcpPort?: number;
+  getTailscaleAddress?: () => string | undefined;
 }
 
 export interface Daemon {
@@ -267,13 +271,20 @@ export async function startDaemon(
   let stopping = false;
   let pollInProgress = false;
   let shutdownPromise: Promise<void> | undefined;
+  let mcpServer: McpServerHandle | undefined;
 
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     stopping = true;
     clearInterval(timer);
     for (const socket of sockets) socket.destroy();
-    shutdownPromise = close(server);
+    shutdownPromise = Promise.all([
+      close(server),
+      // A stuck MCP server must not hold up the shutdown a client just asked
+      // for, and must not be what fails it. The socket teardown is the one
+      // that decides whether the daemon stopped.
+      mcpServer?.stop().catch((error: unknown) => logError(logger, error)),
+    ]).then(() => {});
     return shutdownPromise;
   }
 
@@ -385,6 +396,19 @@ export async function startDaemon(
     return true;
   }
 
+  /**
+   * The one way in for callers that are not a Unix-socket client. It shares
+   * `enqueueClient`, so an MCP call queues behind the same single worker and
+   * runs the same implementation a socket call would.
+   */
+  function dispatch(request: DaemonRequest): Promise<DaemonResponse> {
+    return new Promise((resolve) => {
+      if (!enqueueClient(request, resolve)) {
+        resolve({ ok: false, reason: "busy" });
+      }
+    });
+  }
+
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -435,6 +459,35 @@ export async function startDaemon(
   );
   enqueue({ command: "poll" }, "timer");
   logger.info(`Daemon listening at ${socketPath}`);
+
+  // The socket is already serving by this point, and stays serving whatever
+  // happens here: MCP is an extra, and Tailscale being down or the port being
+  // taken must never keep the daemon from starting (ADR-0008).
+  const tailscaleAddress = (
+    options.getTailscaleAddress ?? getTailscaleAddress
+  )();
+  if (tailscaleAddress === undefined) {
+    logger.warn("No Tailscale address found. MCP server not started");
+  } else {
+    try {
+      const started = await startMcpServer({
+        address: tailscaleAddress,
+        port: options.mcpPort ?? mcpPort,
+        dispatch,
+        onError: (error) => logError(logger, error),
+      });
+      if (shutdownPromise) {
+        // Stopped while this was still binding, so the teardown never saw it.
+        await started.stop();
+      } else {
+        mcpServer = started;
+        logger.info(`MCP server listening at ${started.url}`);
+      }
+    } catch (error) {
+      logger.warn("Failed to start the MCP server");
+      logError(logger, error);
+    }
+  }
 
   return {
     socketPath,

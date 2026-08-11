@@ -42,7 +42,12 @@ export default defineConfig({
   clean: true,
   // Piploy ships only this bundle. Keep every runtime dependency in it rather
   // than relying on a node_modules directory beside the deployed artifact.
-  noExternal: [/^(commander|dockerode|isomorphic-git|pino|zod)(\/.*)?$/],
+  noExternal: [
+    /^(commander|dockerode|isomorphic-git|pino|zod)(\/.*)?$/,
+    // The MCP SDK reaches ajv through its JSON Schema validation, and ajv
+    // requires its runtime helpers by subpath.
+    /^(@modelcontextprotocol\/sdk|ajv|ajv-formats)(\/.*)?$/,
+  ],
   esbuildPlugins: [
     {
       name: "stub-unreachable-docker-ssh-transport",

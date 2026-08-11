@@ -3,6 +3,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -30,6 +32,10 @@ function createLogger(): Logger {
   };
   return logger;
 }
+
+// Tests must never bind a real network port, so no test discovers a Tailscale
+// address unless it is the one asserting on that branch.
+const noTailscale = { getTailscaleAddress: () => undefined };
 
 function sendRequest(
   socketPath: string,
@@ -66,6 +72,7 @@ describe("daemon", () => {
       queueCapacity,
       pollIntervalMinutes: 60,
       deps,
+      ...noTailscale,
     });
     daemons.push(daemon);
     return daemon;
@@ -226,6 +233,7 @@ describe("daemon", () => {
           },
           getStatus: async () => ({ applications: [] }),
         },
+        ...noTailscale,
       });
       daemons.push(daemon);
 
@@ -286,6 +294,7 @@ describe("daemon", () => {
         configPath,
         pollIntervalMinutes: 60,
         deps,
+        ...noTailscale,
       });
       daemons.push(daemon);
       return { daemon, configPath, liveSettings };
@@ -417,6 +426,115 @@ describe("daemon", () => {
       releasePoll!();
       await expect(register).resolves.toMatchObject({ ok: true });
       expect(events).toEqual(["poll", "register"]);
+    });
+  });
+
+  describe("mcp server", () => {
+    function createRecordingLogger(messages: string[]): Logger {
+      const logger: Logger = {
+        debug: () => {},
+        info: (message) => messages.push(`info ${message}`),
+        warn: (message) => messages.push(`warn ${message}`),
+        error: (message) => messages.push(`error ${message}`),
+        child: () => logger,
+      };
+      return logger;
+    }
+
+    /** A port nothing is listening on, so a refused connection is meaningful. */
+    async function reserveFreePort(): Promise<number> {
+      const probe = net.createServer();
+      await new Promise<void>((resolve) =>
+        probe.listen(0, "127.0.0.1", resolve),
+      );
+      const port = (probe.address() as net.AddressInfo).port;
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+      return port;
+    }
+
+    function isListening(port: number): Promise<boolean> {
+      return new Promise((resolve) => {
+        const client = net.createConnection(port, "127.0.0.1");
+        client.once("connect", () => {
+          client.destroy();
+          resolve(true);
+        });
+        client.once("error", () => resolve(false));
+      });
+    }
+
+    async function startWithAddress(
+      address: string | undefined,
+      deps: DaemonDeps,
+      // Port 0 keeps the test off the fixed v1 port.
+      mcpPort = 0,
+    ): Promise<{ daemon: Daemon; messages: string[] }> {
+      const messages: string[] = [];
+      const socketPath = path.join(
+        await mkdtemp(path.join(os.tmpdir(), "piploy-")),
+        "piploy.sock",
+      );
+      const daemon = await startDaemon(
+        settings,
+        createRecordingLogger(messages),
+        {
+          socketPath,
+          pollIntervalMinutes: 60,
+          deps,
+          mcpPort,
+          getTailscaleAddress: () => address,
+        },
+      );
+      daemons.push(daemon);
+      return { daemon, messages };
+    }
+
+    it("keeps serving the socket when no Tailscale address is found", async () => {
+      const mcpPort = await reserveFreePort();
+      const { daemon, messages } = await startWithAddress(
+        undefined,
+        {
+          poll: async () => {},
+          getStatus: async () => ({ applications: [] }),
+          attemptSelfUpdate: async () => "up-to-date",
+        },
+        mcpPort,
+      );
+
+      await expect(isListening(mcpPort)).resolves.toBe(false);
+      await expect(
+        sendRequest(daemon.socketPath, { command: "status" }),
+      ).resolves.toEqual({ ok: true, status: { applications: [] } });
+      expect(messages).toContain(
+        "warn No Tailscale address found. MCP server not started",
+      );
+      expect(
+        messages.some((message) => message.includes("MCP server listening")),
+      ).toBe(false);
+    });
+
+    it("runs MCP tool calls through the same queue as socket clients", async () => {
+      const events: string[] = [];
+      const { messages } = await startWithAddress("127.0.0.1", {
+        poll: async () => {
+          events.push("poll");
+        },
+        getStatus: async () => ({ applications: [] }),
+        attemptSelfUpdate: async () => "up-to-date",
+      });
+      await vi.waitFor(() => expect(events).toEqual(["poll"]));
+
+      const url = messages
+        .find((message) => message.startsWith("info MCP server listening"))
+        ?.split(" at ")[1];
+      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+
+      const client = new Client({ name: "test", version: "0" });
+      await client.connect(new StreamableHTTPClientTransport(new URL(url!)));
+      await client.callTool({ name: "poll" });
+      await client.close();
+
+      expect(events).toEqual(["poll", "poll"]);
     });
   });
 });

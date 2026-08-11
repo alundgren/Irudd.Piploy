@@ -119,6 +119,24 @@ node piploy.cjs register \
 `--json '<application-json>'` passes the whole application instead; it cannot be
 combined with the individual flags.
 
+## MCP server
+
+While the daemon runs, it also serves an MCP endpoint over Streamable HTTP at:
+
+```
+http://<tailscale-address>:8391/mcp
+```
+
+It binds only to the machine's Tailscale address, so it is reachable from the
+tailnet and from nowhere else. There is no token and no other authentication:
+being on the tailnet is the whole of it. If the machine has no Tailscale
+address, the daemon logs a warning and starts anyway, without the endpoint.
+
+It exposes five tools — `status`, `poll`, `register`, `service-start`, and
+`service-stop` — which run exactly what the matching CLI commands do. `wipeall`
+and `self-update` are deliberately not exposed. See
+[ADR-0008](docs/adr/0008-mcp-server-tailscale-only.md).
+
 ## Publishing a release
 
 In GitHub, run the **Release** workflow from the Actions page and enter the
