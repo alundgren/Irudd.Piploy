@@ -1,6 +1,7 @@
 import { Command } from "commander";
 
 import {
+  commandFailed,
   createCommandDeps,
   parseRegisterOptions,
   poll,
@@ -9,6 +10,7 @@ import {
   serviceStop,
   status,
   wipeAll,
+  type CommandDeps,
   type RegisterOptions,
 } from "./commands.js";
 import { createLogger, type Logger } from "./logger.js";
@@ -56,34 +58,45 @@ function addRegisterOptions(command: Command): Command {
     .option("--json <application>", "the whole Application as JSON");
 }
 
-function registerCommand(
+// Only `register` reads the second argument; the rest are zero-arg commands.
+type CommandAction = (deps: CommandDeps, application: unknown) => Promise<void>;
+
+const actions: Record<(typeof commandNames)[number], CommandAction> = {
+  status,
+  "service-start": serviceStart,
+  "service-stop": serviceStop,
+  poll,
+  wipeall: wipeAll,
+  register,
+};
+
+async function runCommand(
+  commandName: (typeof commandNames)[number],
+  application: unknown,
+): Promise<void> {
+  const settings = loadSettings(resolveConfigPath());
+  const deps = createCommandDeps(settings, createLogger(settings));
+  await actions[commandName](deps, application);
+}
+
+function defineCommand(
   program: Command,
   commandName: (typeof commandNames)[number],
 ): void {
   const command = program.command(commandName);
-  if (commandName === "register") addRegisterOptions(command);
-  command.action(async (options: RegisterOptions) => {
-    const parsed =
-      commandName === "register" ? parseRegisterOptions(options) : undefined;
-    if (parsed?.ok === false) {
-      console.error(parsed.message);
-      process.exitCode = 1;
+  if (commandName !== "register") {
+    command.action(() => runCommand(commandName, undefined));
+    return;
+  }
+  // Flags are parsed before the configuration is loaded, so bad input fails on
+  // its own terms rather than on a missing or broken piploy.json.
+  addRegisterOptions(command).action(async (options: RegisterOptions) => {
+    const parsed = parseRegisterOptions(options);
+    if (!parsed.ok) {
+      commandFailed(parsed.message);
       return;
     }
-    const settings = loadSettings(resolveConfigPath());
-    const deps = createCommandDeps(settings, createLogger(settings));
-    if (parsed) {
-      await register(deps, parsed.application);
-      return;
-    }
-    const actions = {
-      status,
-      "service-start": serviceStart,
-      "service-stop": serviceStop,
-      poll,
-      wipeall: wipeAll,
-    } as const;
-    await actions[commandName as Exclude<typeof commandName, "register">](deps);
+    await runCommand(commandName, parsed.application);
   });
 }
 
@@ -109,7 +122,7 @@ export function createProgram(): Command {
     }
   });
   for (const commandName of commandNames) {
-    registerCommand(program, commandName);
+    defineCommand(program, commandName);
   }
 
   return program;

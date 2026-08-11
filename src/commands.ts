@@ -59,7 +59,8 @@ export function createCommandDeps(
   };
 }
 
-function commandFailed(message: string): void {
+/** The one place a command's failure sets both the message and the exit code. */
+export function commandFailed(message: string): void {
   console.error(message);
   process.exitCode = 1;
 }
@@ -142,23 +143,33 @@ export interface RegisterOptions {
 export type ParsedRegisterOptions =
   { ok: true; application: unknown } | { ok: false; message: string };
 
+type ParsedEnvironmentVariables =
+  | { ok: true; environmentVariables: Record<string, string> }
+  | { ok: false; message: string };
+
 function parseEnvironmentVariables(
   values: string[],
-): Record<string, string> | string {
+): ParsedEnvironmentVariables {
   const environmentVariables: Record<string, string> = {};
   for (const value of values) {
+    // Only the first '=' separates: a value may legitimately contain more.
     const separator = value.indexOf("=");
     if (separator < 1) {
-      return `Invalid --env '${value}'. Must have the format KEY=VALUE`;
+      return {
+        ok: false,
+        message: `Invalid --env '${value}'. Must have the format KEY=VALUE`,
+      };
     }
     environmentVariables[value.slice(0, separator)] = value.slice(
       separator + 1,
     );
   }
-  return environmentVariables;
+  return { ok: true, environmentVariables };
 }
 
-function buildApplicationFromFlags(options: RegisterOptions): unknown {
+function buildApplicationFromFlags(
+  options: RegisterOptions,
+): Record<string, unknown> {
   // Optional fields stay absent rather than empty, so a flagless invocation
   // produces the same document an operator would have hand-written.
   const application: Record<string, unknown> = {
@@ -207,16 +218,11 @@ export function parseRegisterOptions(
       };
     }
   } else {
-    const environmentVariables = parseEnvironmentVariables(options.env ?? []);
-    if (typeof environmentVariables === "string") {
-      return { ok: false, message: environmentVariables };
-    }
-    const fromFlags = buildApplicationFromFlags(options) as Record<
-      string,
-      unknown
-    >;
-    if (Object.keys(environmentVariables).length > 0) {
-      fromFlags.EnvironmentVariables = environmentVariables;
+    const parsedEnvironment = parseEnvironmentVariables(options.env ?? []);
+    if (!parsedEnvironment.ok) return parsedEnvironment;
+    const fromFlags = buildApplicationFromFlags(options);
+    if (Object.keys(parsedEnvironment.environmentVariables).length > 0) {
+      fromFlags.EnvironmentVariables = parsedEnvironment.environmentVariables;
     }
     application = fromFlags;
   }
