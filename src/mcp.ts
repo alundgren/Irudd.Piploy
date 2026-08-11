@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 
 import type { DaemonRequest, DaemonResponse } from "./daemon.js";
+import type { ApplicationSchema } from "./settings.js";
 import { piployVersion } from "./version.js";
 
 /** Fixed for v1. Making the port configurable is deliberately deferred. */
@@ -19,6 +20,8 @@ export interface McpServerOptions {
   address: string;
   port: number;
   dispatch: McpDispatch;
+  /** Reports a failure the caller cannot act on, such as a dropped request. */
+  onError(error: unknown): void;
 }
 
 export interface McpServerHandle {
@@ -28,9 +31,14 @@ export interface McpServerHandle {
 }
 
 /**
- * The register payload is passed through untransformed: `ApplicationSchema`
- * is the one authority that validates it, on the daemon side, and what it
- * validates is what gets written to `piploy.json` (ADR-0007).
+ * Describes the register payload for the calling client. `ApplicationSchema`
+ * is still the one authority that validates it, on the daemon side, and the
+ * payload reaches it untransformed, because what it validates is what gets
+ * written to `piploy.json` (ADR-0007). It cannot be reused here for the same
+ * reason: its own fields parse the written strings into richer values.
+ *
+ * The `satisfies` clause is the guard against the two drifting: a field added
+ * to `ApplicationSchema` fails to compile until it is described here too.
  */
 const registerInputSchema = {
   Name: z.string(),
@@ -39,7 +47,10 @@ const registerInputSchema = {
   PortMappings: z.array(z.string()).optional(),
   Volumes: z.array(z.string()).optional(),
   EnvironmentVariables: z.record(z.string(), z.string()).optional(),
-};
+} satisfies Record<
+  keyof Required<z.input<typeof ApplicationSchema>>,
+  z.ZodType
+>;
 
 function toolResult(response: DaemonResponse) {
   return {
@@ -78,7 +89,7 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "register",
     {
       description:
-        "Register one application in piploy.json. The next poll picks it up; registering does not deploy it by itself.",
+        "Register one application in piploy.json. Registering does not start it; the next poll does.",
       inputSchema: registerInputSchema,
     },
     async (application) =>
@@ -145,10 +156,13 @@ export function startMcpServer(
   options: McpServerOptions,
 ): Promise<McpServerHandle> {
   const server = http.createServer((request, response) => {
-    handleRequest(request, response, options.dispatch).catch(() => {
-      if (!response.headersSent) response.writeHead(500);
-      response.end();
-    });
+    handleRequest(request, response, options.dispatch).catch(
+      (error: unknown) => {
+        options.onError(error);
+        if (!response.headersSent) response.writeHead(500);
+        response.end();
+      },
+    );
   });
 
   return new Promise((resolve, reject) => {
@@ -158,6 +172,10 @@ export function startMcpServer(
     };
     const onListening = () => {
       server.off("error", onError);
+      // An 'error' after listening, such as a client resetting a connection,
+      // is fatal to the process if nothing is listening for it. Losing the
+      // daemon to a tailnet client's mistake is the one outcome to avoid.
+      server.on("error", options.onError);
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       resolve({

@@ -1,4 +1,10 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { builtinModules } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -6,21 +12,29 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 
 const bundlePath = path.resolve("dist/piploy.cjs");
-const allowedModules = new Set(
-  builtinModules.flatMap((moduleName) => [moduleName, `node:${moduleName}`]),
-);
-// A require preceded by a quote or backtick is source text a bundled library
-// generates for its own consumers (ajv emits `require("ajv/dist/runtime/...")`
-// into generated validators), not a require this bundle performs.
+// ajv is bundled, but it also emits these specifiers as source text into the
+// validators it generates for its own consumers. Nothing here requires them.
+const generatedSpecifiers = [
+  "ajv/dist/runtime/equal",
+  "ajv/dist/runtime/ucs2length",
+  "ajv/dist/runtime/uri",
+  "ajv/dist/runtime/validation_error",
+  "ajv-formats/dist/formats",
+];
+const allowedModules = new Set([
+  ...builtinModules.flatMap((moduleName) => [moduleName, `node:${moduleName}`]),
+  ...generatedSpecifiers,
+]);
 const requiredModules = [
   ...readFileSync(bundlePath, "utf8").matchAll(
-    /(?<!['"`])\brequire\((["'])([^"']+)\1\)/g,
+    /\brequire\((["'])([^"']+)\1\)/g,
   ),
 ].map((match) => match[2]);
 const externalModules = [
   ...new Set(
     requiredModules.filter(
-      (moduleName) => moduleName !== undefined && !allowedModules.has(moduleName),
+      (moduleName) =>
+        moduleName !== undefined && !allowedModules.has(moduleName),
     ),
   ),
 ];
@@ -31,7 +45,9 @@ if (externalModules.length > 0) {
   );
 }
 
-const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "piploy-bundle-"));
+const temporaryDirectory = mkdtempSync(
+  path.join(os.tmpdir(), "piploy-bundle-"),
+);
 
 try {
   const deployedBundlePath = path.join(temporaryDirectory, "piploy.cjs");

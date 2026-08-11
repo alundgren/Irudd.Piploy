@@ -441,9 +441,33 @@ describe("daemon", () => {
       return logger;
     }
 
+    /** A port nothing is listening on, so a refused connection is meaningful. */
+    async function reserveFreePort(): Promise<number> {
+      const probe = net.createServer();
+      await new Promise<void>((resolve) =>
+        probe.listen(0, "127.0.0.1", resolve),
+      );
+      const port = (probe.address() as net.AddressInfo).port;
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+      return port;
+    }
+
+    function isListening(port: number): Promise<boolean> {
+      return new Promise((resolve) => {
+        const client = net.createConnection(port, "127.0.0.1");
+        client.once("connect", () => {
+          client.destroy();
+          resolve(true);
+        });
+        client.once("error", () => resolve(false));
+      });
+    }
+
     async function startWithAddress(
       address: string | undefined,
       deps: DaemonDeps,
+      // Port 0 keeps the test off the fixed v1 port.
+      mcpPort = 0,
     ): Promise<{ daemon: Daemon; messages: string[] }> {
       const messages: string[] = [];
       const socketPath = path.join(
@@ -457,8 +481,7 @@ describe("daemon", () => {
           socketPath,
           pollIntervalMinutes: 60,
           deps,
-          // Port 0 keeps the test off the fixed v1 port.
-          mcpPort: 0,
+          mcpPort,
           getTailscaleAddress: () => address,
         },
       );
@@ -467,12 +490,18 @@ describe("daemon", () => {
     }
 
     it("keeps serving the socket when no Tailscale address is found", async () => {
-      const { daemon, messages } = await startWithAddress(undefined, {
-        poll: async () => {},
-        getStatus: async () => ({ applications: [] }),
-        attemptSelfUpdate: async () => "up-to-date",
-      });
+      const mcpPort = await reserveFreePort();
+      const { daemon, messages } = await startWithAddress(
+        undefined,
+        {
+          poll: async () => {},
+          getStatus: async () => ({ applications: [] }),
+          attemptSelfUpdate: async () => "up-to-date",
+        },
+        mcpPort,
+      );
 
+      await expect(isListening(mcpPort)).resolves.toBe(false);
       await expect(
         sendRequest(daemon.socketPath, { command: "status" }),
       ).resolves.toEqual({ ok: true, status: { applications: [] } });

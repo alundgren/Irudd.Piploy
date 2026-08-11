@@ -39,6 +39,9 @@ describe("mcp server", () => {
         requests.push(request);
         return respond(request);
       },
+      onError: (error) => {
+        throw error;
+      },
     });
     servers.push(server);
 

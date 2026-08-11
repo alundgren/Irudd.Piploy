@@ -278,9 +278,13 @@ export async function startDaemon(
     stopping = true;
     clearInterval(timer);
     for (const socket of sockets) socket.destroy();
-    shutdownPromise = Promise.all([close(server), mcpServer?.stop()]).then(
-      () => {},
-    );
+    shutdownPromise = Promise.all([
+      close(server),
+      // A stuck MCP server must not hold up the shutdown a client just asked
+      // for, and must not be what fails it. The socket teardown is the one
+      // that decides whether the daemon stopped.
+      mcpServer?.stop().catch((error: unknown) => logError(logger, error)),
+    ]).then(() => {});
     return shutdownPromise;
   }
 
@@ -466,12 +470,19 @@ export async function startDaemon(
     logger.warn("No Tailscale address found. MCP server not started");
   } else {
     try {
-      mcpServer = await startMcpServer({
+      const started = await startMcpServer({
         address: tailscaleAddress,
         port: options.mcpPort ?? mcpPort,
         dispatch,
+        onError: (error) => logError(logger, error),
       });
-      logger.info(`MCP server listening at ${mcpServer.url}`);
+      if (shutdownPromise) {
+        // Stopped while this was still binding, so the teardown never saw it.
+        await started.stop();
+      } else {
+        mcpServer = started;
+        logger.info(`MCP server listening at ${started.url}`);
+      }
     } catch (error) {
       logger.warn("Failed to start the MCP server");
       logError(logger, error);
