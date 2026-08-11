@@ -2,11 +2,14 @@ import { Command } from "commander";
 
 import {
   createCommandDeps,
+  parseRegisterOptions,
   poll,
+  register,
   serviceStart,
   serviceStop,
   status,
   wipeAll,
+  type RegisterOptions,
 } from "./commands.js";
 import { createLogger, type Logger } from "./logger.js";
 import { loadSettings, resolveConfigPath } from "./settings.js";
@@ -19,15 +22,60 @@ const commandNames = [
   "service-stop",
   "poll",
   "wipeall",
+  "register",
 ] as const;
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+/** `register` is the one command carrying a payload, so it alone takes flags. */
+function addRegisterOptions(command: Command): Command {
+  return command
+    .option("--name <name>", "application name")
+    .option("--git-repository-url <url>", "git repository to deploy from")
+    .option("--dockerfile-path <path>", "Dockerfile path within the repository")
+    .option(
+      "--port-mapping <hostPort:containerPort>",
+      "port mapping, repeatable",
+      collect,
+      [],
+    )
+    .option(
+      "--volume <name:/container/path>",
+      "volume, repeatable",
+      collect,
+      [],
+    )
+    .option(
+      "--env <KEY=VALUE>",
+      "environment variable, repeatable",
+      collect,
+      [],
+    )
+    .option("--json <application>", "the whole Application as JSON");
+}
 
 function registerCommand(
   program: Command,
   commandName: (typeof commandNames)[number],
 ): void {
-  program.command(commandName).action(async () => {
+  const command = program.command(commandName);
+  if (commandName === "register") addRegisterOptions(command);
+  command.action(async (options: RegisterOptions) => {
+    const parsed =
+      commandName === "register" ? parseRegisterOptions(options) : undefined;
+    if (parsed?.ok === false) {
+      console.error(parsed.message);
+      process.exitCode = 1;
+      return;
+    }
     const settings = loadSettings(resolveConfigPath());
     const deps = createCommandDeps(settings, createLogger(settings));
+    if (parsed) {
+      await register(deps, parsed.application);
+      return;
+    }
     const actions = {
       status,
       "service-start": serviceStart,
@@ -35,7 +83,7 @@ function registerCommand(
       poll,
       wipeall: wipeAll,
     } as const;
-    await actions[commandName](deps);
+    await actions[commandName as Exclude<typeof commandName, "register">](deps);
   });
 }
 

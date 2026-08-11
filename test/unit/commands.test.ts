@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  parseRegisterOptions,
   poll,
+  register,
   serviceStart,
   serviceStop,
   status,
@@ -9,6 +11,12 @@ import {
   type CommandDeps,
 } from "../../src/commands.js";
 import type { DaemonStatus } from "../../src/daemon.js";
+
+const application = {
+  Name: "app",
+  GitRepositoryUrl: "https://example.com/app.git",
+  DockerfilePath: "Dockerfile",
+};
 
 const daemonStatus: DaemonStatus = {
   applications: [
@@ -26,6 +34,7 @@ function createDeps(): CommandDeps {
     requestDaemon: vi.fn(),
     computeStatusInline: vi.fn(async () => daemonStatus),
     pollInline: vi.fn(),
+    register: vi.fn(),
     wipeAll: vi.fn(),
     getPreservedApplicationDataDirectories: vi.fn(() => []),
     startDaemon: vi.fn(async () => ({
@@ -177,5 +186,201 @@ describe("commands", () => {
     await serviceStart(deps);
 
     expect(deps.startDaemon).toHaveBeenCalledOnce();
+  });
+
+  it("reports the registered application name on success", async () => {
+    const deps = createDeps();
+    deps.register = vi.fn(async () => ({
+      ok: true as const,
+      application: { ...application },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await register(deps, application);
+
+    expect(deps.register).toHaveBeenCalledWith(application);
+    expect(output).toHaveBeenCalledWith("Registered application app.");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("reports an invalid application with the daemon message", async () => {
+    const deps = createDeps();
+    deps.register = vi.fn(async () => ({
+      ok: false as const,
+      reason: "invalid-application" as const,
+      message: "Name: Invalid input",
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register(deps, application);
+
+    expect(error).toHaveBeenCalledWith(
+      "Register failed: invalid-application. Name: Invalid input",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reports a duplicate application with the daemon message", async () => {
+    const deps = createDeps();
+    deps.register = vi.fn(async () => ({
+      ok: false as const,
+      reason: "duplicate-application" as const,
+      message: "An application named 'app' is already registered",
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register(deps, application);
+
+    expect(error).toHaveBeenCalledWith(
+      "Register failed: duplicate-application. An application named 'app' is already registered",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reports a generic daemon rejection without a message", async () => {
+    const deps = createDeps();
+    deps.register = vi.fn(async () => ({
+      ok: false as const,
+      reason: "busy" as const,
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register(deps, application);
+
+    expect(error).toHaveBeenCalledWith("Daemon register request failed: busy");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses to register without a running daemon", async () => {
+    const deps = createDeps();
+    deps.register = vi.fn(async () => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register(deps, application);
+
+    expect(error).toHaveBeenCalledWith(
+      "Background service not running. Start it, then run 'piploy register' again.",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reports a success response missing its application", async () => {
+    const deps = createDeps();
+    deps.register = vi.fn(async () => ({ ok: true as const }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await register(deps, application);
+
+    expect(error).toHaveBeenCalledWith(
+      "Daemon register request returned no application",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("parseRegisterOptions", () => {
+  it("builds a raw application from the individual flags", () => {
+    const parsed = parseRegisterOptions({
+      name: "app",
+      gitRepositoryUrl: "https://example.com/app.git",
+      dockerfilePath: "Dockerfile",
+      portMapping: ["8080:80", "8443:443"],
+      volume: ["data:/var/lib/app"],
+      env: ["A=1", "B=x=y"],
+    });
+
+    expect(parsed).toEqual({
+      ok: true,
+      application: {
+        ...application,
+        PortMappings: ["8080:80", "8443:443"],
+        Volumes: ["data:/var/lib/app"],
+        EnvironmentVariables: { A: "1", B: "x=y" },
+      },
+    });
+  });
+
+  it("omits optional fields when their flags are absent", () => {
+    const parsed = parseRegisterOptions({
+      name: "app",
+      gitRepositoryUrl: "https://example.com/app.git",
+      dockerfilePath: "Dockerfile",
+      portMapping: [],
+      volume: [],
+      env: [],
+    });
+
+    expect(parsed).toEqual({ ok: true, application });
+  });
+
+  it("accepts a whole application as JSON", () => {
+    const parsed = parseRegisterOptions({
+      json: JSON.stringify({ ...application, PortMappings: ["8080:80"] }),
+    });
+
+    expect(parsed).toEqual({
+      ok: true,
+      application: { ...application, PortMappings: ["8080:80"] },
+    });
+  });
+
+  it("rejects mixing --json with the individual flags", () => {
+    const parsed = parseRegisterOptions({
+      json: JSON.stringify(application),
+      name: "other",
+    });
+
+    expect(parsed).toEqual({
+      ok: false,
+      message: "Use either --json or the individual flags, not both.",
+    });
+  });
+
+  it("rejects malformed JSON", () => {
+    const parsed = parseRegisterOptions({ json: "{" });
+
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok === false && parsed.message).toMatch(/^Invalid --json\./);
+  });
+
+  it("rejects an --env flag without a key and value", () => {
+    const parsed = parseRegisterOptions({
+      name: "app",
+      gitRepositoryUrl: "https://example.com/app.git",
+      dockerfilePath: "Dockerfile",
+      env: ["=1"],
+    });
+
+    expect(parsed).toEqual({
+      ok: false,
+      message: "Invalid --env '=1'. Must have the format KEY=VALUE",
+    });
+  });
+
+  it("rejects an application the schema refuses", () => {
+    const parsed = parseRegisterOptions({
+      name: "not a valid name",
+      gitRepositoryUrl: "https://example.com/app.git",
+      dockerfilePath: "Dockerfile",
+    });
+
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok === false && parsed.message).toMatch(
+      /^Invalid application\./,
+    );
+  });
+
+  it("rejects a port mapping the schema refuses before contacting the daemon", () => {
+    const parsed = parseRegisterOptions({
+      name: "app",
+      gitRepositoryUrl: "https://example.com/app.git",
+      dockerfilePath: "Dockerfile",
+      portMapping: ["80"],
+    });
+
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok === false && parsed.message).toContain(
+      "Invalid port mappings",
+    );
   });
 });

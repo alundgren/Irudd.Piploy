@@ -120,6 +120,22 @@ function describeValidationError(error: z.ZodError): string {
 }
 
 /**
+ * Validates one candidate Application, throwing the same rejection a daemon
+ * register request would produce. Shared so the CLI can reject bad input before
+ * a round trip and report it the same way the daemon would.
+ */
+export function parseApplication(rawApplication: unknown): Application {
+  const parsed = ApplicationSchema.safeParse(rawApplication);
+  if (!parsed.success) {
+    throw new RegisterApplicationError(
+      "invalid-application",
+      describeValidationError(parsed.error),
+    );
+  }
+  return parsed.data;
+}
+
+/**
  * Adds one Application to `piploy.json`. The raw input is what gets persisted:
  * `PortMappings` and `Volumes` are strings on disk and only the parsed value is
  * transformed, so writing the transformed Application back would produce a
@@ -129,14 +145,7 @@ export function registerApplication(
   configPath: string,
   rawApplication: unknown,
 ): Application {
-  const parsed = ApplicationSchema.safeParse(rawApplication);
-  if (!parsed.success) {
-    throw new RegisterApplicationError(
-      "invalid-application",
-      describeValidationError(parsed.error),
-    );
-  }
-  const application = parsed.data;
+  const application = parseApplication(rawApplication);
 
   const currentConfig = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
   // An invalid file here is a broken installation, not a bad request, so it

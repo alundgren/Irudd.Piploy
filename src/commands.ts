@@ -12,13 +12,21 @@ import {
 import { createDockerService } from "./docker.js";
 import type { Logger } from "./logger.js";
 import type { PiploySettings } from "./settings.js";
-import { getApplicationDataDirectory } from "./settings.js";
+import {
+  getApplicationDataDirectory,
+  parseApplication,
+  RegisterApplicationError,
+} from "./settings.js";
 import { piployVersion } from "./version.js";
+
+/** A daemon register response, or `undefined` when no daemon answered. */
+export type RegisterResult = DaemonResponse | undefined;
 
 export interface CommandDeps {
   requestDaemon(request: DaemonRequest): Promise<DaemonResponse | undefined>;
   computeStatusInline(): Promise<DaemonStatus>;
   pollInline(): Promise<void>;
+  register(application: unknown): Promise<RegisterResult>;
   wipeAll(): Promise<void>;
   getPreservedApplicationDataDirectories(): string[];
   startDaemon(): Promise<Daemon>;
@@ -34,6 +42,8 @@ export function createCommandDeps(
     requestDaemon,
     computeStatusInline: daemonDeps.getStatus,
     pollInline: daemonDeps.poll,
+    register: (application) =>
+      requestDaemon({ command: "register", application }),
     async wipeAll() {
       try {
         await createDockerService(settings, logger).cleanupAll();
@@ -116,6 +126,139 @@ export async function poll(deps: CommandDeps): Promise<void> {
     return;
   }
   console.log("Poll completed.");
+}
+
+/** The `register` flags commander collects, before they become an Application. */
+export interface RegisterOptions {
+  json?: string;
+  name?: string;
+  gitRepositoryUrl?: string;
+  dockerfilePath?: string;
+  portMapping?: string[];
+  volume?: string[];
+  env?: string[];
+}
+
+export type ParsedRegisterOptions =
+  { ok: true; application: unknown } | { ok: false; message: string };
+
+function parseEnvironmentVariables(
+  values: string[],
+): Record<string, string> | string {
+  const environmentVariables: Record<string, string> = {};
+  for (const value of values) {
+    const separator = value.indexOf("=");
+    if (separator < 1) {
+      return `Invalid --env '${value}'. Must have the format KEY=VALUE`;
+    }
+    environmentVariables[value.slice(0, separator)] = value.slice(
+      separator + 1,
+    );
+  }
+  return environmentVariables;
+}
+
+function buildApplicationFromFlags(options: RegisterOptions): unknown {
+  // Optional fields stay absent rather than empty, so a flagless invocation
+  // produces the same document an operator would have hand-written.
+  const application: Record<string, unknown> = {
+    Name: options.name,
+    GitRepositoryUrl: options.gitRepositoryUrl,
+    DockerfilePath: options.dockerfilePath,
+  };
+  if (options.portMapping?.length) {
+    application.PortMappings = options.portMapping;
+  }
+  if (options.volume?.length) application.Volumes = options.volume;
+  return application;
+}
+
+/**
+ * Turns `register` flags into the raw Application to send. Raw, not parsed:
+ * the daemon persists exactly what it receives, and `PortMappings`/`Volumes`
+ * are strings on disk. Validation runs here only to fail with a CLI message
+ * instead of a daemon rejection reason.
+ */
+export function parseRegisterOptions(
+  options: RegisterOptions,
+): ParsedRegisterOptions {
+  const usesFlags =
+    options.name !== undefined ||
+    options.gitRepositoryUrl !== undefined ||
+    options.dockerfilePath !== undefined ||
+    (options.portMapping?.length ?? 0) > 0 ||
+    (options.volume?.length ?? 0) > 0 ||
+    (options.env?.length ?? 0) > 0;
+
+  let application: unknown;
+  if (options.json !== undefined) {
+    if (usesFlags) {
+      return {
+        ok: false,
+        message: "Use either --json or the individual flags, not both.",
+      };
+    }
+    try {
+      application = JSON.parse(options.json);
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Invalid --json. ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  } else {
+    const environmentVariables = parseEnvironmentVariables(options.env ?? []);
+    if (typeof environmentVariables === "string") {
+      return { ok: false, message: environmentVariables };
+    }
+    const fromFlags = buildApplicationFromFlags(options) as Record<
+      string,
+      unknown
+    >;
+    if (Object.keys(environmentVariables).length > 0) {
+      fromFlags.EnvironmentVariables = environmentVariables;
+    }
+    application = fromFlags;
+  }
+
+  try {
+    parseApplication(application);
+  } catch (error) {
+    if (!(error instanceof RegisterApplicationError)) throw error;
+    return { ok: false, message: `Invalid application. ${error.message}` };
+  }
+  return { ok: true, application };
+}
+
+/**
+ * Registers one Application with the running daemon. There is no inline
+ * fallback: register exists to reach the live daemon's settings, and writing
+ * the file alone would still need a restart (ADR-0007).
+ */
+export async function register(
+  deps: CommandDeps,
+  application: unknown,
+): Promise<void> {
+  const response = await deps.register(application);
+  if (response === undefined) {
+    commandFailed(
+      "Background service not running. Start it, then run 'piploy register' again.",
+    );
+    return;
+  }
+  if (!response.ok) {
+    commandFailed(
+      "message" in response
+        ? `Register failed: ${response.reason}. ${response.message}`
+        : `Daemon register request failed: ${response.reason}`,
+    );
+    return;
+  }
+  if (!("application" in response)) {
+    commandFailed("Daemon register request returned no application");
+    return;
+  }
+  console.log(`Registered application ${response.application.Name}.`);
 }
 
 /** Asks the running daemon to stop without falling back to a local action. */
