@@ -85,22 +85,39 @@ The daemon's control socket is created with `0600` permissions and owned by the
 user the daemon runs as, so the commands below must run as that same user to
 reach it. Another user gets the offline fallback described under `status`.
 
-| Command | What it does |
-| --- | --- |
-| `status` | Prints the Piploy version, whether the background service is reachable, and per-application Git and Docker state. |
-| `poll` | Runs one reconciliation now instead of waiting for the poll timer. |
-| `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up. |
-| `service-stop` | Asks the running daemon to shut down. |
-| `wipeall` | Removes all Piploy containers and images and deletes the root directory. Application data is preserved and its paths are printed. |
-| `self-update` | Checks GitHub for a newer release and installs it. |
-| `--version` | Prints the running bundle's version. |
-| `--help` | Lists the commands. |
+| Command         | What it does                                                                                                                                       |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application Git and Docker state.                                  |
+| `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                 |
+| `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                    |
+| `service-stop`  | Asks the running daemon to shut down.                                                                                                              |
+| `register`      | Adds one application to `piploy.json` and to the running daemon, so the next poll deploys it without a restart. Requires the daemon to be running. |
+| `wipeall`       | Removes all Piploy containers and images and deletes the root directory. Application data is preserved and its paths are printed.                  |
+| `self-update`   | Checks GitHub for a newer release and installs it.                                                                                                 |
+| `--version`     | Prints the running bundle's version.                                                                                                               |
+| `--help`        | Lists the commands.                                                                                                                                |
 
 ### `status`
 
 ```bash
 node piploy.cjs status
 ```
+
+### `register`
+
+```bash
+node piploy.cjs register \
+  --name my-app \
+  --git-repository-url https://github.com/me/my-app.git \
+  --dockerfile-path Dockerfile \
+  --port-mapping 8080:80 \
+  --volume data:/var/lib/my-app \
+  --env NODE_ENV=production
+```
+
+`--port-mapping`, `--volume`, and `--env` may each be repeated. For scripting,
+`--json '<application-json>'` passes the whole application instead; it cannot be
+combined with the individual flags.
 
 ## MCP server
 
