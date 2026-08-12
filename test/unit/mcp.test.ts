@@ -67,6 +67,16 @@ describe("mcp server", () => {
     ]);
   });
 
+  it("describes status port mappings", async () => {
+    const { client } = await start();
+
+    const { tools } = await client.listTools();
+
+    expect(tools.find((tool) => tool.name === "status")?.description).toContain(
+      "host-to-container port mappings",
+    );
+  });
+
   it("routes status through the daemon dispatcher", async () => {
     const status = { applications: [] };
     const { client, requests } = await start(() => ({ ok: true, status }));

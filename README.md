@@ -87,7 +87,7 @@ reach it. Another user gets the offline fallback described under `status`.
 
 | Command         | What it does                                                                                                                                       |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application Git and Docker state.                                  |
+| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application configured host-to-container port mappings, Git, and Docker state. |
 | `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                 |
 | `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                    |
 | `service-stop`  | Asks the running daemon to shut down.                                                                                                              |

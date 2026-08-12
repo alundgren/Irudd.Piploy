@@ -71,7 +71,7 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "status",
     {
       description:
-        "Report each registered application's git commits, Docker image and container hashes, and whether it runs the latest version.",
+        "Report each registered application's configured host-to-container port mappings (an empty array means none), git commits, Docker image and container hashes, and whether it runs the latest version.",
     },
     async () => toolResult(await dispatch({ command: "status" })),
   );

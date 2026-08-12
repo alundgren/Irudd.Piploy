@@ -11,9 +11,17 @@ container. Do not use this workflow for a group of containers.
 ## Read-only first
 
 Start with the MCP `status` tool. It is read-only: use it to see the currently
-registered Applications and their Git and Docker state. Do not infer that a
-missing health-check result or logs are available; this MCP does not promise
-either.
+registered Applications, their configured host-to-container `portMappings`,
+and their Git and Docker state. `portMappings` is always an array: an empty
+array means that Application has no configured host ports. Each entry has a
+`hostPort` and `containerPort`, corresponding to the `"hostPort:containerPort"`
+form in an Application payload.
+
+Use those configured host ports to avoid a conflict with another Piploy
+Application when proposing `PortMappings`. This is not a host-wide port scan:
+a port absent from `status` can still be bound by a non-Piploy process, so do
+not claim it is globally available. Do not infer that a missing health-check
+result or logs are available; this MCP does not promise either.
 
 ## Derive the payload from the repository
 
@@ -106,3 +114,13 @@ status → approval → register → approval → poll → status
 `service-stop` as part of this guide. Do not promise log access or
 Application-level health checks. If the available MCP results are insufficient,
 ask for explicit human permission before falling back to SSH.
+
+## Cloudflare Tunnel mapping
+
+Cloudflare Tunnel configuration is currently manual. After the Application is
+running, use the chosen **host** side of its `PortMappings` entry as the tunnel
+service port — not the container port. For example, a mapping of
+`"8080:80"` means Piploy publishes container port `80` on host port `8080`,
+so the Cloudflare Tunnel public-hostname service must point to
+`http://localhost:8080` (or the equivalent local-host service address for the
+tunnel process). State this mapping to the human who maintains the tunnel.

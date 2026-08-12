@@ -87,6 +87,9 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
     console.log(
       `  Running container hash: ${application.docker.runningContainerHash ?? "none"}`,
     );
+    console.log(
+      `  Port mappings: ${application.portMappings.length === 0 ? "none" : application.portMappings.map(({ hostPort, containerPort }) => `${hostPort}:${containerPort}`).join(", ")}`,
+    );
   }
 }
 

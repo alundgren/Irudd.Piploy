@@ -85,6 +85,7 @@ describe("daemon", () => {
         applications: [
           {
             application: "app",
+            portMappings: [{ hostPort: 8080, containerPort: 80 }],
             git: null,
             docker: {},
             isRunningLatestVersion: false,
@@ -103,6 +104,7 @@ describe("daemon", () => {
         applications: [
           {
             application: "app",
+            portMappings: [{ hostPort: 8080, containerPort: 80 }],
             git: null,
             docker: {},
             isRunningLatestVersion: false,
