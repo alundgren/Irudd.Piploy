@@ -22,6 +22,7 @@ const daemonStatus: DaemonStatus = {
   applications: [
     {
       application: "app",
+      portMappings: [{ hostPort: 8080, containerPort: 80 }],
       git: null,
       docker: {},
       isRunningLatestVersion: false,
@@ -63,6 +64,22 @@ describe("commands", () => {
     expect(deps.requestDaemon).toHaveBeenCalledWith({ command: "status" });
     expect(deps.computeStatusInline).not.toHaveBeenCalled();
     expect(output).toHaveBeenCalledWith("Background service: running");
+    expect(output).toHaveBeenCalledWith("  Port mappings: 8080:80");
+  });
+
+  it("prints an explicit no-port-mappings state", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      status: {
+        applications: [{ ...daemonStatus.applications[0]!, portMappings: [] }],
+      },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(output).toHaveBeenCalledWith("  Port mappings: none");
   });
 
   it("computes status inline only when no daemon is reachable", async () => {

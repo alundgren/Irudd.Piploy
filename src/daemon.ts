@@ -16,6 +16,7 @@ import {
   resolveConfigPath,
   type Application,
   type PiploySettings,
+  type PortMapping,
   type RegisterApplicationFailure,
 } from "./settings.js";
 import { isRunningLatestVersion } from "./status.js";
@@ -42,6 +43,8 @@ export type DaemonResponse =
 
 export interface ApplicationDaemonStatus {
   application: string;
+  /** Configured host-to-container mappings; empty means this Application exposes none. */
+  portMappings: PortMapping[];
   git: GitCommitStatus | null;
   docker: DockerStatus;
   isRunningLatestVersion: boolean;
@@ -122,6 +125,9 @@ export function createDaemonDeps(
     ]);
     return {
       application: application.Name,
+      // `PortMappings` is optional in configuration, but status is an agent
+      // API: make the no-mappings case unambiguous rather than omitting it.
+      portMappings: application.PortMappings ?? [],
       git,
       docker: dockerStatus,
       isRunningLatestVersion: isRunningLatestVersion(git, dockerStatus),
