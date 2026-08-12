@@ -70,7 +70,10 @@ jobs:
 
       - run: pnpm test
 
-      - run: pnpm build
+      - name: Build release bundle
+        env:
+          PIPLOY_RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+        run: pnpm build
 
       - name: Create release tag
         if: github.event_name == 'workflow_dispatch'
