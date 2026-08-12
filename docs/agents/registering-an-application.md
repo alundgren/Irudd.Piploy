@@ -8,6 +8,13 @@ configuration, machine or tailnet names, addresses, or secrets.
 An Application is one Git repository that Piploy turns into exactly one
 container. Do not use this workflow for a group of containers.
 
+This guide is the public half of the workflow. A companion agent-workflow
+deployment skill, kept in a separate private repository that this guide
+deliberately does not name or link, carries the operational details omitted
+here, such as non-secret connection hints. It complements this contract rather
+than replacing it: the payload rules, the approval gate, and the boundaries
+below hold either way.
+
 ## Read-only first
 
 Start with the MCP `status` tool. It is read-only: use it to see the currently
@@ -28,6 +35,9 @@ result or logs are available; this MCP does not promise either.
 Before proposing a change, inspect the application repository and confirm:
 
 - the Dockerfile's path relative to the repository root;
+- that every `COPY` and `ADD` source in that Dockerfile resolves inside the
+  Dockerfile's own directory, because that directory, not the repository root,
+  is the build context Piploy sends to Docker;
 - which ports the container listens on and which, if any, should be exposed on
   the host;
 - the environment variables the container needs, including their literal
@@ -51,10 +61,10 @@ the persisted form: `PortMappings` and `Volumes` remain strings in
 | --- | --- | --- | --- |
 | `Name` | Yes | A string containing only letters, numbers, `_`, and `-`. It must not exactly match an already registered Application name; comparison is case-sensitive. | Stored as submitted and used to identify the Application and its data directory. |
 | `GitRepositoryUrl` | Yes | Any string at payload validation; it must identify a repository Piploy can clone when it polls. | Stored as submitted. A Poll clones it when absent, otherwise fetches it and resets the local clone to the remote tip. |
-| `DockerfilePath` | Yes | Any string at payload validation. During a Poll it must identify a Dockerfile relative to the repository root; a path ending in `/` is rejected. Piploy trims whitespace, accepts `\\` as separators, and strips one leading `/`; examples include `Dockerfile`, `SubDirectory/Dockerfile`, and `Dockerfile.custom`. | Stored as submitted. Its parent path is the Docker build context. |
+| `DockerfilePath` | Yes | Any string at payload validation. During a Poll it must identify a Dockerfile relative to the repository root; a path ending in `/` is rejected. Piploy trims whitespace, accepts `\\` as separators, and strips one leading `/`; examples include `Dockerfile`, `SubDirectory/Dockerfile`, and `Dockerfile.custom`. | Stored as submitted. Its parent path, not the repository root, is the Docker build context: a Dockerfile in a subdirectory can only `COPY` from that subdirectory. |
 | `PortMappings` | No | An array of strings, each exactly `<hostPort>:<containerPort>` with digits on both sides, for example `"8080:80"`. | Stored as submitted; parsed into host/container port pairs for the container. Omit it when no host port should be exposed. |
 | `Volumes` | No | An array of strings, each `<name>:/container/path`. `name` uses letters, numbers, `_`, or `-`. The container path is absolute, has at least one segment, contains neither `:` nor `..`, and cannot be `/`. Two Volumes for one Application cannot target the same container path. | Stored as submitted; parsed into a named Volume and its container path for the container. |
-| `EnvironmentVariables` | No | An object whose keys and values are strings. Values are literal: Piploy performs no interpolation. | Stored as submitted and passed to the container verbatim. Do not put secrets in a public guide or approval record. |
+| `EnvironmentVariables` | No | An object whose keys and values are strings. Values are literal: Piploy performs no interpolation. | Stored as submitted and passed to the container verbatim. Piploy has no secret store, so a credential passed this way is written to `piploy.json` in plaintext. See the production-change gate for how to keep one out of the approval record without weakening the gate. |
 
 Each named Volume resolves to a Piploy-created directory under Piploy's data
 directory, alongside its configuration, rather than under `RootDirectory`.
@@ -71,7 +81,7 @@ example values and no production topology or secrets.
 {
   "Name": "example-app",
   "GitRepositoryUrl": "https://github.com/example/example-app.git",
-  "DockerfilePath": "docker/Dockerfile",
+  "DockerfilePath": "Dockerfile",
   "PortMappings": ["8080:8080"],
   "Volumes": ["app-data:/var/lib/example-app"],
   "EnvironmentVariables": {
@@ -81,12 +91,28 @@ example values and no production topology or secrets.
 }
 ```
 
+This example builds from the repository root. A `DockerfilePath` such as
+`docker/Dockerfile` is equally valid, but then `docker/` alone is the build
+context: only its contents reach Docker, and the repository's other files are
+not available to `COPY`. Use a subdirectory path only after confirming the
+Dockerfile builds from that directory.
+
 ## Production-change gate
 
 `register` and `poll` change production state. Before calling either tool,
 state the exact intended action and payload, its expected impact, and its
-failure mode; then obtain explicit human approval. A useful approval request
-is:
+failure mode; then obtain explicit human approval.
+
+Show the payload exactly, with one exception: replace the value of an
+`EnvironmentVariables` entry that carries a credential with a placeholder, and
+say which key it belongs to. Every key stays visible, because which variables
+the container gets is part of what is being approved; only secret values are
+withheld. The call you make after approval uses that same payload with the
+real value in place — a redacted approval record never means a redacted
+`register`. If a secret has to be rotated or reviewed later, that happens on
+the host, not through this workflow.
+
+A useful approval request is:
 
 > I intend to register this Application with the exact payload shown above.
 > This writes it to Piploy's configuration and makes it available to the next
@@ -94,8 +120,9 @@ is:
 > is already registered, registration is rejected and the configuration is not
 > changed. May I proceed?
 
-After approval of the `register` request, call `register` with that unchanged
-payload. Then make a separate, explicit request before polling, for example:
+After approval of the `register` request, call `register` with that payload,
+changing nothing but the restored value of a redacted secret. Then make a
+separate, explicit request before polling, for example:
 
 > I intend to run one Poll for all registered Applications, with no payload.
 > It will fetch each repository, build what is needed, and start or replace
