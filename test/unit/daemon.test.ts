@@ -217,6 +217,9 @@ describe("daemon", () => {
     "runs self-update before polling on a timer tick when it is %s",
     async (updateResult, expectedEvents) => {
       vi.useFakeTimers();
+      const exit = vi
+        .spyOn(process, "exit")
+        .mockImplementation(() => undefined as never);
       const events: string[] = [];
       const socketPath = path.join(
         await mkdtemp(path.join(os.tmpdir(), "piploy-")),
@@ -244,6 +247,12 @@ describe("daemon", () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(events).toEqual(expectedEvents);
+      if (updateResult === "updated") {
+        expect(exit).toHaveBeenCalledWith(0);
+      } else {
+        expect(exit).not.toHaveBeenCalled();
+      }
+      exit.mockRestore();
     },
   );
 

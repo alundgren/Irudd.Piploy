@@ -93,7 +93,7 @@ reach it. Another user gets the offline fallback described under `status`.
 | `service-stop`  | Asks the running daemon to shut down.                                                                                                              |
 | `register`      | Adds one application to `piploy.json` and to the running daemon, so the next poll deploys it without a restart. Requires the daemon to be running. |
 | `wipeall`       | Removes all Piploy containers and images and deletes the root directory. Application data is preserved and its paths are printed.                  |
-| `self-update`   | Checks GitHub for a newer release and installs it.                                                                                                 |
+| `self-update`   | Checks GitHub for a newer release, installs it, then restarts the running daemon through its control socket.                                      |
 | `--version`     | Prints the running bundle's version.                                                                                                               |
 | `--help`        | Lists the commands.                                                                                                                                |
 

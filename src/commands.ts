@@ -284,6 +284,30 @@ export async function serviceStop(deps: CommandDeps): Promise<void> {
   console.log("Piploy daemon stopped.");
 }
 
+/**
+ * Stops the live daemon after a CLI self-update so systemd restarts it from
+ * the newly swapped bundle. This uses Piploy's private control socket rather
+ * than requiring the invoking user to have permission for `systemctl`.
+ */
+export async function restartDaemonAfterUpdate(
+  request: CommandDeps["requestDaemon"],
+): Promise<void> {
+  const response = await request({ command: "stop" });
+  if (response === undefined) {
+    commandFailed(
+      "Piploy update installed, but no daemon is reachable to restart.",
+    );
+    return;
+  }
+  if (!response.ok) {
+    commandFailed(
+      `Piploy update installed, but daemon restart failed: ${response.reason}`,
+    );
+    return;
+  }
+  console.log("Piploy update installed; restarting daemon.");
+}
+
 /** Cleans up all Piploy Docker resources and removes the configured root directory. */
 export async function wipeAll(deps: CommandDeps): Promise<void> {
   await deps.wipeAll();

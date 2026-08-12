@@ -454,9 +454,12 @@ export async function startDaemon(
 
   async function runTimerTick(): Promise<void> {
     const updateResult = await deps.attemptSelfUpdate();
-    if (updateResult !== "updated") {
-      enqueue({ command: "poll" }, "timer");
+    if (updateResult === "updated") {
+      // systemd's Restart=always starts the newly swapped bundle.
+      process.exit(0);
+      return;
     }
+    enqueue({ command: "poll" }, "timer");
   }
 
   const timer = setInterval(

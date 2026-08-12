@@ -4,6 +4,7 @@ import {
   parseRegisterOptions,
   poll,
   register,
+  restartDaemonAfterUpdate,
   serviceStart,
   serviceStop,
   status,
@@ -178,6 +179,29 @@ describe("commands", () => {
     expect(deps.requestDaemon).toHaveBeenCalledWith({ command: "stop" });
     expect(output).toHaveBeenCalledWith("Piploy daemon stopped.");
     expect(error).toHaveBeenCalledWith("No Piploy daemon is reachable.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("stops the daemon after a CLI self-update so systemd can restart it", async () => {
+    const request = vi.fn(async () => ({ ok: true as const }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await restartDaemonAfterUpdate(request);
+
+    expect(request).toHaveBeenCalledWith({ command: "stop" });
+    expect(output).toHaveBeenCalledWith(
+      "Piploy update installed; restarting daemon.",
+    );
+  });
+
+  it("reports when an installed update cannot restart a daemon", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await restartDaemonAfterUpdate(async () => undefined);
+
+    expect(error).toHaveBeenCalledWith(
+      "Piploy update installed, but no daemon is reachable to restart.",
+    );
     expect(process.exitCode).toBe(1);
   });
 
