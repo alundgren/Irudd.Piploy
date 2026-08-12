@@ -62,10 +62,6 @@ describe("self-update", () => {
     const configPath = path.join(bundleDirectory, "piploy.json");
     await writeFile(bundlePath, "old Piploy bundle");
     await writeFile(configPath, '{"Piploy":{}}');
-    const exit = vi
-      .spyOn(process, "exit")
-      .mockImplementation(() => undefined as never);
-
     await expect(
       attemptSelfUpdate(createSilentLogger(), {
         bundleDirectory,
@@ -73,7 +69,6 @@ describe("self-update", () => {
       }),
     ).resolves.toBe("updated");
 
-    expect(exit).toHaveBeenCalledWith(0);
     await expect(readFile(bundlePath, "utf8")).resolves.toBe(
       "new Piploy bundle",
     );

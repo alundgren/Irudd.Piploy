@@ -12,6 +12,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 
 const bundlePath = path.resolve("dist/piploy.cjs");
+const expectedReleaseTag = process.env.PIPLOY_RELEASE_TAG;
 // ajv is bundled, but it also emits these specifiers as source text into the
 // validators it generates for its own consumers. Nothing here requires them.
 const generatedSpecifiers = [
@@ -70,6 +71,15 @@ try {
     if (result.error || result.status !== 0) {
       throw new Error(
         `Clean-install check failed for '${args.join(" ")}': ${result.error?.message ?? result.stderr}`,
+      );
+    }
+    if (
+      args[0] === "--version" &&
+      expectedReleaseTag &&
+      result.stdout.trim() !== expectedReleaseTag
+    ) {
+      throw new Error(
+        `Release bundle reports the wrong version: expected ${expectedReleaseTag}, got ${result.stdout}`,
       );
     }
   }

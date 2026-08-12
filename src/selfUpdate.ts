@@ -116,8 +116,7 @@ export async function attemptSelfUpdate(
       release.downloadUrl,
       options.bundleDirectory ?? resolveBundleDirectory(),
     );
-    logger.info(`Installed Piploy update ${release.tag}; restarting`);
-    process.exit(0);
+    logger.info(`Installed Piploy update ${release.tag}`);
     return "updated";
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

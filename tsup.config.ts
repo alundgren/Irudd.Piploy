@@ -24,13 +24,17 @@ function releaseTagAtHead(): string | undefined {
   }
 }
 
-// Self-update (#8, #29) compares a release's `tag_name` against this constant
-// verbatim, so a build made at a tagged commit must carry the tag itself —
-// not the package version — or every poll would see a spurious update.
+// Self-update (#8, #29, #95) compares a release's `tag_name` against this
+// constant verbatim. Release builds provide their normalized tag explicitly,
+// so manually-dispatched releases do not need to create a tag before building.
+// Tagged local builds retain the same behavior without an explicit override.
 const gitCommit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
   encoding: "utf8",
 }).trim();
-const version = releaseTagAtHead() ?? `${packageJson.version}+${gitCommit}`;
+const version =
+  process.env.PIPLOY_RELEASE_TAG ??
+  releaseTagAtHead() ??
+  `${packageJson.version}+${gitCommit}`;
 
 export default defineConfig({
   entry: { piploy: "src/cli.ts" },

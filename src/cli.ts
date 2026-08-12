@@ -6,6 +6,7 @@ import {
   parseRegisterOptions,
   poll,
   register,
+  restartDaemonAfterUpdate,
   serviceStart,
   serviceStop,
   status,
@@ -13,6 +14,7 @@ import {
   type CommandDeps,
   type RegisterOptions,
 } from "./commands.js";
+import { requestDaemon } from "./daemon.js";
 import { createLogger, type Logger } from "./logger.js";
 import { loadSettings, resolveConfigPath } from "./settings.js";
 import { attemptSelfUpdate } from "./selfUpdate.js";
@@ -117,7 +119,9 @@ export function createProgram(): Command {
   program.name("piploy").version(piployVersion);
   program.command("self-update").action(async () => {
     const result = await attemptSelfUpdate(createConsoleLogger());
-    if (result === "failed") {
+    if (result === "updated") {
+      await restartDaemonAfterUpdate(requestDaemon);
+    } else if (result === "failed") {
       process.exitCode = 1;
     }
   });
