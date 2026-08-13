@@ -4,6 +4,7 @@ import {
   createOrchestrator,
   type OrchestratorDeps,
 } from "../../src/orchestrator.js";
+import { PortAlreadyInUseError } from "../../src/docker.js";
 import type { Logger } from "../../src/logger.js";
 import type { Application, PiploySettings } from "../../src/settings.js";
 
@@ -95,7 +96,7 @@ describe("orchestrator", () => {
       if (application.Name === "first") throw new Error("build failed");
     });
 
-    await createOrchestrator(settings, logger, deps).poll();
+    const results = await createOrchestrator(settings, logger, deps).poll();
 
     expect(deps.ensureContainerRunning).toHaveBeenCalledTimes(1);
     expect(deps.ensureContainerRunning).toHaveBeenCalledWith(applications[1], {
@@ -103,5 +104,69 @@ describe("orchestrator", () => {
     });
     expect(deps.cleanupInactive).toHaveBeenCalledWith(applications);
     expect(errors).toEqual(["build failed"]);
+    expect(results).toEqual([
+      {
+        application: "first",
+        ok: false,
+        stage: "build",
+        message: "build failed",
+      },
+      { application: "second", ok: true },
+    ]);
+  });
+
+  it("identifies a repository failure as fetch", async () => {
+    const deps = createDeps();
+    deps.ensureLocalRepository = vi.fn(async () => {
+      throw new Error("clone failed");
+    });
+
+    const results = await createOrchestrator(
+      settings,
+      createLogger(),
+      deps,
+    ).poll();
+
+    expect(results).toEqual([
+      {
+        application: "first",
+        ok: false,
+        stage: "fetch",
+        message: "clone failed",
+      },
+      {
+        application: "second",
+        ok: false,
+        stage: "fetch",
+        message: "clone failed",
+      },
+    ]);
+  });
+
+  it("surfaces a port conflict as a typed start failure", async () => {
+    const deps = createDeps();
+    deps.ensureContainerRunning = vi.fn(async (application) => {
+      if (application.Name === "first") {
+        throw new PortAlreadyInUseError([8080]);
+      }
+    });
+
+    const results = await createOrchestrator(
+      settings,
+      createLogger(),
+      deps,
+    ).poll();
+
+    expect(results).toEqual([
+      {
+        application: "first",
+        ok: false,
+        stage: "start",
+        code: "portAlreadyInUse",
+        message:
+          "At least one of these ports are already in use by the host: 8080",
+      },
+      { application: "second", ok: true },
+    ]);
   });
 });

@@ -11,7 +11,7 @@ import {
   wipeAll,
   type CommandDeps,
 } from "../../src/commands.js";
-import type { DaemonStatus } from "../../src/daemon.js";
+import type { DaemonResponse, DaemonStatus } from "../../src/daemon.js";
 
 const application = {
   Name: "app",
@@ -35,7 +35,7 @@ function createDeps(): CommandDeps {
   return {
     requestDaemon: vi.fn(),
     computeStatusInline: vi.fn(async () => daemonStatus),
-    pollInline: vi.fn(),
+    pollInline: vi.fn(async () => []),
     register: vi.fn(),
     wipeAll: vi.fn(),
     getPreservedApplicationDataDirectories: vi.fn(() => []),
@@ -130,13 +130,26 @@ describe("commands", () => {
 
   it("delegates poll to a reachable daemon", async () => {
     const deps = createDeps();
-    deps.requestDaemon = vi.fn(async () => ({ ok: true as const }));
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    const response: DaemonResponse = {
+      ok: true,
+      applications: [
+        {
+          application: "app",
+          ok: false,
+          stage: "build",
+          message: "Dockerfile is invalid",
+        },
+      ],
+    };
+    deps.requestDaemon = vi.fn(async () => response);
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await poll(deps);
 
     expect(deps.requestDaemon).toHaveBeenCalledWith({ command: "poll" });
     expect(deps.pollInline).not.toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith("Poll completed with failures:");
+    expect(output).toHaveBeenCalledWith("  app (build): Dockerfile is invalid");
   });
 
   it("runs poll inline only when no daemon is reachable", async () => {

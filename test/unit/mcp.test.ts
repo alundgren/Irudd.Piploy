@@ -88,12 +88,25 @@ describe("mcp server", () => {
   });
 
   it("routes poll through the daemon dispatcher", async () => {
-    const { client, requests } = await start();
+    const applications = [
+      {
+        application: "app",
+        ok: false as const,
+        stage: "start" as const,
+        code: "portAlreadyInUse" as const,
+        message: "Port 8080 is already in use",
+      },
+    ];
+    const { client, requests } = await start(() => ({
+      ok: true,
+      applications,
+    }));
 
     const result = await client.callTool({ name: "poll" });
 
     expect(requests).toEqual([{ command: "poll" }]);
     expect(result.isError).toBeFalsy();
+    expect(JSON.parse(textOf(result))).toEqual({ ok: true, applications });
   });
 
   it("routes service-stop to the daemon stop command", async () => {

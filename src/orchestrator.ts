@@ -1,4 +1,4 @@
-import { createDockerService } from "./docker.js";
+import { createDockerService, PortAlreadyInUseError } from "./docker.js";
 import { ensureLocalRepository, getLatestCommit } from "./git.js";
 import type { Logger } from "./logger.js";
 import type { Application, PiploySettings } from "./settings.js";
@@ -18,11 +18,27 @@ export interface OrchestratorDeps {
 }
 
 export interface Orchestrator {
-  poll(): Promise<void>;
+  poll(): Promise<PollApplicationResult[]>;
+}
+
+export type PollApplicationResult =
+  | { application: string; ok: true }
+  | {
+      application: string;
+      ok: false;
+      stage: PollFailureStage;
+      message: string;
+      code?: "portAlreadyInUse";
+    };
+
+export type PollFailureStage = "fetch" | "build" | "start";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function logError(logger: Logger, error: unknown): void {
-  logger.error(error instanceof Error ? error.message : String(error));
+  logger.error(errorMessage(error));
 }
 
 /** Wires the one real git and Docker adapter into the orchestrator's narrow seam. */
@@ -51,9 +67,10 @@ export function createOrchestrator(
   logger: Logger,
   deps: OrchestratorDeps = createOrchestratorDeps(settings, logger),
 ): Orchestrator {
-  async function poll(): Promise<void> {
+  async function poll(): Promise<PollApplicationResult[]> {
     const pollLogger = logger.child({ operation: "poll" });
     pollLogger.info("Polling applications");
+    const results: PollApplicationResult[] = [];
 
     try {
       for (const application of settings.Applications) {
@@ -62,19 +79,34 @@ export function createOrchestrator(
         });
         applicationLogger.info(`Polling application: ${application.Name}`);
 
+        let stage: PollFailureStage = "fetch";
         try {
           await deps.ensureLocalRepository(application);
           const commit = await deps.getLatestCommit(application);
+          stage = "build";
           await deps.ensureImageExists(application, commit);
+          stage = "start";
           await deps.ensureContainerRunning(application, commit);
+          results.push({ application: application.Name, ok: true });
         } catch (error) {
           logError(applicationLogger, error);
+          results.push({
+            application: application.Name,
+            ok: false,
+            stage,
+            message: errorMessage(error),
+            ...(error instanceof PortAlreadyInUseError
+              ? { code: error.code }
+              : {}),
+          });
         }
       }
     } finally {
       pollLogger.info("Cleaning up unused images");
       await deps.cleanupInactive(settings.Applications);
     }
+
+    return results;
   }
 
   return { poll };
