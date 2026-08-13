@@ -4,6 +4,7 @@ import path from "node:path";
 import Dockerode from "dockerode";
 
 import {
+  containerLogConfig,
   getContainerConfigHash,
   getDockerfilePathFromSetting,
   planContainer,
@@ -313,6 +314,7 @@ export function createDockerService(
         PortBindings: portBindings,
         Binds: binds,
         AutoRemove: true,
+        LogConfig: containerLogConfig,
       },
       Labels: { [containerConfigLabelName]: configHash },
     });
