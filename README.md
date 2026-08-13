@@ -49,6 +49,8 @@ These steps install Piploy on a new Pi. They assume the service user is
    ```ini
    [Unit]
    Description=Raspberry Pi + Docker application runner
+   After=docker.service
+   Requires=docker.service
 
    [Service]
    WorkingDirectory=/home/irudd/Piploy
@@ -66,6 +68,13 @@ These steps install Piploy on a new Pi. They assume the service user is
 
    ```bash
    sudo systemctl daemon-reload && sudo systemctl enable --now piploy
+   ```
+
+   On an existing installation, add the two Docker directives to the `[Unit]`
+   section, then apply them with:
+
+   ```bash
+   sudo systemctl daemon-reload && sudo systemctl restart piploy
    ```
 
 ## Running CLI commands
