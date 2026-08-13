@@ -96,7 +96,8 @@ reach it. Another user gets the offline fallback described under `status`.
 
 | Command         | What it does                                                                                                                                       |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application configured host-to-container port mappings, Git, and Docker state. |
+| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application configured host-to-container port mappings, Git, and Docker state, including the container's state, exit code, and restart count. |
+| `logs`          | Prints one application's recent container output, running or exited. `--tail <lines>` sets how much. Requires the daemon to be running.            |
 | `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                 |
 | `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                    |
 | `service-stop`  | Asks the running daemon to shut down.                                                                                                              |
@@ -111,6 +112,17 @@ reach it. Another user gets the offline fallback described under `status`.
 ```bash
 node piploy.cjs status
 ```
+
+### `logs`
+
+```bash
+node piploy.cjs logs my-app --tail 500
+```
+
+Returns at most 2000 lines and 256 KB, keeping the most recent output. Docker
+caps what it retains at roughly 30 MB per application, so anything older than
+that is already gone. Application logs are returned unredacted and may contain
+secrets.
 
 ### `register`
 
@@ -141,9 +153,9 @@ tailnet and from nowhere else. There is no token and no other authentication:
 being on the tailnet is the whole of it. If the machine has no Tailscale
 address, the daemon logs a warning and starts anyway, without the endpoint.
 
-It exposes five tools — `status`, `poll`, `register`, `service-start`, and
-`service-stop` — which run exactly what the matching CLI commands do. `wipeall`
-and `self-update` are deliberately not exposed. See
+It exposes six tools — `status`, `logs`, `poll`, `register`, `service-start`,
+and `service-stop` — which run exactly what the matching CLI commands do.
+`wipeall` and `self-update` are deliberately not exposed. See
 [ADR-0008](docs/adr/0008-mcp-server-tailscale-only.md).
 
 ## Publishing a release

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import Dockerode from "dockerode";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createDockerService } from "../../src/docker.js";
 import { getContainerConfigHash } from "../../src/dockerPlan.js";
@@ -33,9 +33,15 @@ const application = {
   Volumes: [{ name: "sqlite", containerPath: "/app/data" }],
   EnvironmentVariables: { DATABASE_PATH: "/app/data/app.db" },
 };
+const crashingCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+const crashingApplication = {
+  Name: `${applicationName}crash`,
+  GitRepositoryUrl: "https://example.invalid/integration.git",
+  DockerfilePath: "Dockerfile",
+};
 const settings: PiploySettings = {
   RootDirectory: path.join(temporaryDirectory, "root"),
-  Applications: [application],
+  Applications: [application, crashingApplication],
   IsTestRun: true,
 };
 const docker = createDockerService(settings, logger);
@@ -57,7 +63,7 @@ describe("docker adapter", () => {
     await mkdir(repoDirectory, { recursive: true });
     await writeFile(
       path.join(repoDirectory, "Dockerfile"),
-      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "while true; do sleep 3600; done"]\n',
+      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "echo hello-from-piploy; while true; do sleep 3600; done"]\n',
     );
 
     const built = await docker.ensureImageExists(application, commit);
@@ -103,12 +109,50 @@ describe("docker adapter", () => {
       wasStarted: false,
       containerId: started.containerId,
     });
-    expect(await docker.getDockerStatus(application)).toEqual({
+    expect(await docker.getDockerStatus(application)).toMatchObject({
       latestImageHash: commit.hash,
       runningContainerHash: commit.hash,
+      container: { state: "running", exitCode: undefined, restartCount: 0 },
     });
+
+    const logs = await docker.getContainerLogs(application, 10);
+    expect(logs?.containerState).toBe("running");
+    expect(logs?.text).toContain("hello-from-piploy");
+    expect(logs?.truncated).toBe(false);
 
     await docker.cleanupTestCreated();
     expect(await docker.getDockerStatus(application)).toEqual({});
+    expect(await docker.getContainerLogs(application, 10)).toBeUndefined();
+  });
+
+  it("reports the exit code and logs of a container that crashes on boot", async () => {
+    const repoDirectory = path.join(
+      settings.RootDirectory,
+      crashingApplication.Name,
+      "repo",
+    );
+    await mkdir(repoDirectory, { recursive: true });
+    await writeFile(
+      path.join(repoDirectory, "Dockerfile"),
+      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "echo crashing-on-boot >&2; exit 3"]\n',
+    );
+
+    await docker.ensureImageExists(crashingApplication, crashingCommit);
+    await docker.ensureContainerRunning(crashingApplication, crashingCommit);
+
+    // The restart policy keeps the container alive as a slot, so it is seen
+    // either mid-restart or between attempts. Both carry the last exit code.
+    const status = await vi.waitFor(async () => {
+      const current = await docker.getDockerStatus(crashingApplication);
+      expect(current.container?.exitCode).toBe(3);
+      return current;
+    });
+    expect(status.runningContainerHash).toBeUndefined();
+    expect(["restarting", "exited"]).toContain(status.container?.state);
+
+    const logs = await docker.getContainerLogs(crashingApplication, 10);
+    expect(logs?.text).toContain("crashing-on-boot");
+
+    await docker.cleanupTestCreated();
   });
 });

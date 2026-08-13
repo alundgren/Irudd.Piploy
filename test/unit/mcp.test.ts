@@ -53,12 +53,13 @@ describe("mcp server", () => {
     return { client, requests };
   }
 
-  it("exposes exactly the five safe commands as tools", async () => {
+  it("exposes exactly the six safe commands as tools", async () => {
     const { client } = await start();
 
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "logs",
       "poll",
       "register",
       "service-start",
@@ -75,6 +76,50 @@ describe("mcp server", () => {
     expect(tools.find((tool) => tool.name === "status")?.description).toContain(
       "host-to-container port mappings",
     );
+  });
+
+  it("warns that logs are returned unredacted", async () => {
+    const { client } = await start();
+
+    const { tools } = await client.listTools();
+
+    expect(tools.find((tool) => tool.name === "logs")?.description).toContain(
+      "may contain secrets",
+    );
+  });
+
+  it("routes logs through the daemon dispatcher with the requested tail", async () => {
+    const logs = {
+      application: "app",
+      containerState: "restarting",
+      text: "boom\n",
+      truncated: false,
+      tail: 10,
+    };
+    const { client, requests } = await start(() => ({ ok: true, logs }));
+
+    const result = await client.callTool({
+      name: "logs",
+      arguments: { application: "app", tail: 10 },
+    });
+
+    expect(requests).toEqual([
+      { command: "logs", application: "app", tail: 10 },
+    ]);
+    expect(JSON.parse(textOf(result))).toEqual({ ok: true, logs });
+  });
+
+  it("rejects a logs tail above the hard maximum before dispatching", async () => {
+    const { client, requests } = await start();
+
+    const result = await client.callTool({
+      name: "logs",
+      arguments: { application: "app", tail: 1_000_000 },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("tail");
+    expect(requests).toEqual([]);
   });
 
   it("routes status through the daemon dispatcher", async () => {

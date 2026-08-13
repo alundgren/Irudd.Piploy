@@ -3,6 +3,7 @@ import { Command } from "commander";
 import {
   commandFailed,
   createCommandDeps,
+  logs,
   parseRegisterOptions,
   poll,
   register,
@@ -14,6 +15,7 @@ import {
   type CommandDeps,
   type RegisterOptions,
 } from "./commands.js";
+import { defaultLogTailLines, maxLogTailLines } from "./containerLogs.js";
 import { requestDaemon } from "./daemon.js";
 import { createLogger, type Logger } from "./logger.js";
 import { loadSettings, resolveConfigPath } from "./settings.js";
@@ -27,6 +29,7 @@ const commandNames = [
   "poll",
   "wipeall",
   "register",
+  "logs",
 ] as const;
 
 function collect(value: string, previous: string[]): string[] {
@@ -60,8 +63,8 @@ function addRegisterOptions(command: Command): Command {
     .option("--json <application>", "the whole Application as JSON");
 }
 
-// Only `register` reads the second argument; the rest are zero-arg commands.
-type CommandAction = (deps: CommandDeps, application: unknown) => Promise<void>;
+// Only `register` and `logs` read the second argument; the rest are zero-arg.
+type CommandAction = (deps: CommandDeps, payload: never) => Promise<void>;
 
 const actions: Record<(typeof commandNames)[number], CommandAction> = {
   status,
@@ -70,15 +73,16 @@ const actions: Record<(typeof commandNames)[number], CommandAction> = {
   poll,
   wipeall: wipeAll,
   register,
+  logs,
 };
 
 async function runCommand(
   commandName: (typeof commandNames)[number],
-  application: unknown,
+  payload: unknown,
 ): Promise<void> {
   const settings = loadSettings(resolveConfigPath());
   const deps = createCommandDeps(settings, createLogger(settings));
-  await actions[commandName](deps, application);
+  await actions[commandName](deps, payload as never);
 }
 
 function defineCommand(
@@ -86,6 +90,24 @@ function defineCommand(
   commandName: (typeof commandNames)[number],
 ): void {
   const command = program.command(commandName);
+  if (commandName === "logs") {
+    command
+      .argument("<application>", "registered application name")
+      .option(
+        "--tail <lines>",
+        `lines to return (default ${defaultLogTailLines}, maximum ${maxLogTailLines})`,
+      )
+      .action(async (application: string, options: { tail?: string }) => {
+        const tail =
+          options.tail === undefined ? undefined : Number(options.tail);
+        if (tail !== undefined && !Number.isInteger(tail)) {
+          commandFailed("Invalid --tail. It must be a whole number of lines.");
+          return;
+        }
+        await runCommand(commandName, { application, tail });
+      });
+    return;
+  }
   if (commandName !== "register") {
     command.action(() => runCommand(commandName, undefined));
     return;

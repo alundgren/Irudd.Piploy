@@ -37,6 +37,12 @@ function createLogger(): Logger {
 // address unless it is the one asserting on that branch.
 const noTailscale = { getTailscaleAddress: () => undefined };
 
+// The default for every test that is not about logs: nothing is registered.
+const noLogs: DaemonDeps["getLogs"] = async () => ({
+  ok: false,
+  reason: "unknown-application",
+});
+
 function sendRequest(
   socketPath: string,
   request: unknown,
@@ -80,6 +86,7 @@ describe("daemon", () => {
 
   it("serves daemon-computed status over a private socket", async () => {
     const daemon = await start({
+      getLogs: noLogs,
       poll: async () => [],
       getStatus: async () => ({
         applications: [
@@ -114,6 +121,60 @@ describe("daemon", () => {
     });
   });
 
+  it("returns container logs for one application over the private socket", async () => {
+    const logs = {
+      application: "app",
+      containerState: "exited",
+      text: "boom\n",
+      truncated: false,
+      tail: 50,
+    };
+    const requested: { application: string; tail?: number }[] = [];
+    const daemon = await start({
+      getLogs: async (application, tail) => {
+        requested.push({ application, tail });
+        return { ok: true, logs };
+      },
+      poll: async () => [],
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+
+    await expect(
+      requestDaemon(
+        { command: "logs", application: "app", tail: 50 },
+        daemon.socketPath,
+      ),
+    ).resolves.toEqual({ ok: true, logs });
+    expect(requested).toEqual([{ application: "app", tail: 50 }]);
+  });
+
+  it("reports an application with no container as a distinct logs rejection", async () => {
+    const daemon = await start({
+      getLogs: async () => ({ ok: false, reason: "no-container" }),
+      poll: async () => [],
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+
+    await expect(
+      requestDaemon({ command: "logs", application: "app" }, daemon.socketPath),
+    ).resolves.toEqual({ ok: false, reason: "no-container" });
+  });
+
+  it("rejects a logs request without an application name", async () => {
+    const daemon = await start({
+      getLogs: noLogs,
+      poll: async () => [],
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+
+    await expect(
+      sendRequest(daemon.socketPath, { command: "logs", application: 7 }),
+    ).resolves.toEqual({ ok: false, reason: "invalid-request" });
+  });
+
   it("returns per-application poll results over the private socket", async () => {
     const applications = [
       {
@@ -124,6 +185,7 @@ describe("daemon", () => {
       },
     ];
     const daemon = await start({
+      getLogs: noLogs,
       poll: async () => applications,
       getStatus: async () => ({ applications: [] }),
       attemptSelfUpdate: async () => "up-to-date",
@@ -142,6 +204,7 @@ describe("daemon", () => {
     let polls = 0;
     const daemon = await start(
       {
+        getLogs: noLogs,
         poll: async () => {
           polls += 1;
           if (polls === 2) await firstPoll;
@@ -176,6 +239,7 @@ describe("daemon", () => {
       releasePoll = resolve;
     });
     const daemon = await start({
+      getLogs: noLogs,
       poll: async () => {
         await pollGate;
         return [];
@@ -190,6 +254,11 @@ describe("daemon", () => {
     await expect(
       sendRequest(daemon.socketPath, { command: "status" }),
     ).resolves.toEqual({ ok: false, reason: "poll-in-progress" });
+    // Logs report on the same state a running poll is changing, so they answer
+    // the same way rather than queueing behind a slow build.
+    await expect(
+      sendRequest(daemon.socketPath, { command: "logs", application: "app" }),
+    ).resolves.toEqual({ ok: false, reason: "poll-in-progress" });
 
     releasePoll!();
     await expect(poll).resolves.toEqual({ ok: true, applications: [] });
@@ -197,6 +266,7 @@ describe("daemon", () => {
 
   it("rejects malformed requests", async () => {
     const daemon = await start({
+      getLogs: noLogs,
       poll: async () => [],
       getStatus: async () => ({ applications: [] }),
       attemptSelfUpdate: async () => "up-to-date",
@@ -215,6 +285,7 @@ describe("daemon", () => {
       return undefined as never;
     }) as typeof process.exit);
     const daemon = await start({
+      getLogs: noLogs,
       poll: async () => [],
       getStatus: async () => ({ applications: [] }),
       attemptSelfUpdate: async () => "up-to-date",
@@ -255,6 +326,7 @@ describe("daemon", () => {
             events.push("update");
             return updateResult;
           },
+          getLogs: noLogs,
           poll: async () => {
             events.push("poll");
             return [];
@@ -286,6 +358,7 @@ describe("daemon", () => {
         events.push("update");
         return "up-to-date";
       },
+      getLogs: noLogs,
       poll: async () => {
         events.push("poll");
         return [];
@@ -337,6 +410,7 @@ describe("daemon", () => {
 
     function idleDeps(): DaemonDeps {
       return {
+        getLogs: noLogs,
         poll: async () => [],
         getStatus: async () => ({ applications: [] }),
         attemptSelfUpdate: async () => "up-to-date",
@@ -531,6 +605,7 @@ describe("daemon", () => {
       const { daemon, messages } = await startWithAddress(
         undefined,
         {
+          getLogs: noLogs,
           poll: async () => [],
           getStatus: async () => ({ applications: [] }),
           attemptSelfUpdate: async () => "up-to-date",
@@ -553,6 +628,7 @@ describe("daemon", () => {
     it("runs MCP tool calls through the same queue as socket clients", async () => {
       const events: string[] = [];
       const { messages } = await startWithAddress("127.0.0.1", {
+        getLogs: noLogs,
         poll: async () => {
           events.push("poll");
           return [];

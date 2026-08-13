@@ -2,6 +2,7 @@ import { chmodSync, existsSync, lstatSync, unlinkSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
+import { resolveTailLines } from "./containerLogs.js";
 import { createDockerService, type DockerStatus } from "./docker.js";
 import { getCommitStatus, type GitCommitStatus } from "./git.js";
 import type { Logger } from "./logger.js";
@@ -32,18 +33,39 @@ export type DaemonRequest =
   | { command: "status" }
   | { command: "poll" }
   | { command: "stop" }
+  | { command: "logs"; application: string; tail?: number }
   | { command: "register"; application: unknown };
 
 export type DaemonResponse =
   | { ok: true; status: DaemonStatus }
   | { ok: true; applications: PollApplicationResult[] }
   | { ok: true; application: Application }
+  | { ok: true; logs: ApplicationLogs }
   | { ok: true }
   | {
       ok: false;
-      reason: "busy" | "invalid-request" | "failed" | "poll-in-progress";
+      reason:
+        | "busy"
+        | "invalid-request"
+        | "failed"
+        | "poll-in-progress"
+        | "unknown-application"
+        | "no-container";
     }
   | { ok: false; reason: RegisterApplicationFailure; message: string };
+
+export interface ApplicationLogs {
+  application: string;
+  containerState: string;
+  /** Timestamped stdout and stderr, oldest first. May contain secrets. */
+  text: string;
+  truncated: boolean;
+  tail: number;
+}
+
+export type ApplicationLogsResult =
+  | { ok: true; logs: ApplicationLogs }
+  | { ok: false; reason: "unknown-application" | "no-container" };
 
 export interface ApplicationDaemonStatus {
   application: string;
@@ -61,6 +83,7 @@ export interface DaemonStatus {
 export interface DaemonDeps {
   poll(): Promise<PollApplicationResult[]>;
   getStatus(): Promise<DaemonStatus>;
+  getLogs(application: string, tail?: number): Promise<ApplicationLogsResult>;
   attemptSelfUpdate(): Promise<SelfUpdateResult>;
 }
 
@@ -106,6 +129,14 @@ function parseRequest(value: unknown): DaemonRequest | undefined {
   if (command === "register" && "application" in value) {
     return { command: "register", application: value.application };
   }
+  if (command === "logs" && "application" in value) {
+    if (typeof value.application !== "string") return undefined;
+    const tail =
+      "tail" in value && typeof value.tail === "number"
+        ? value.tail
+        : undefined;
+    return { command: "logs", application: value.application, tail };
+  }
   return undefined;
 }
 
@@ -138,6 +169,30 @@ export function createDaemonDeps(
     };
   }
 
+  async function getLogs(
+    name: string,
+    tail?: number,
+  ): Promise<ApplicationLogsResult> {
+    const application = settings.Applications.find(
+      (candidate) => candidate.Name === name,
+    );
+    if (!application) return { ok: false, reason: "unknown-application" };
+
+    const tailLines = resolveTailLines(tail);
+    const logs = await docker.getContainerLogs(application, tailLines);
+    if (!logs) return { ok: false, reason: "no-container" };
+    return {
+      ok: true,
+      logs: {
+        application: application.Name,
+        containerState: logs.containerState,
+        text: logs.text,
+        truncated: logs.truncated,
+        tail: tailLines,
+      },
+    };
+  }
+
   return {
     poll: () => orchestrator.poll(),
     getStatus: async () => ({
@@ -145,6 +200,7 @@ export function createDaemonDeps(
         settings.Applications.map(getApplicationStatus),
       ),
     }),
+    getLogs,
     attemptSelfUpdate: () => attemptSelfUpdate(logger),
   };
 }
@@ -324,6 +380,12 @@ export async function startDaemon(
       switch (request.command) {
         case "status":
           return { ok: true, status: await deps.getStatus() };
+        case "logs": {
+          const result = await deps.getLogs(request.application, request.tail);
+          return result.ok
+            ? { ok: true, logs: result.logs }
+            : { ok: false, reason: result.reason };
+        }
         case "stop":
           return { ok: true };
         case "register":
@@ -388,7 +450,12 @@ export async function startDaemon(
     request: DaemonRequest,
     respond: (response: DaemonResponse) => void,
   ): boolean {
-    if (request.command === "status" && pollInProgress) {
+    // Both read-only commands answer about state a running poll is actively
+    // changing, so they say so rather than queue behind a slow build.
+    if (
+      (request.command === "status" || request.command === "logs") &&
+      pollInProgress
+    ) {
       respond({ ok: false, reason: "poll-in-progress" });
       return true;
     }

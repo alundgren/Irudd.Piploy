@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  logs,
   parseRegisterOptions,
   poll,
   register,
@@ -83,6 +84,46 @@ describe("commands", () => {
     expect(output).toHaveBeenCalledWith("  Port mappings: none");
   });
 
+  it("prints the container state, exit code, and restart count", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      status: {
+        applications: [
+          {
+            ...daemonStatus.applications[0]!,
+            docker: {
+              container: { state: "restarting", exitCode: 1, restartCount: 4 },
+            },
+          },
+        ],
+      },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(output).toHaveBeenCalledWith("  Container state: restarting");
+    expect(output).toHaveBeenCalledWith("  Container exit code: 1");
+    expect(output).toHaveBeenCalledWith("  Container restart count: 4");
+  });
+
+  it("prints no container state when the application has no container", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      status: daemonStatus,
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(output).toHaveBeenCalledWith("  Container state: none");
+    expect(output).not.toHaveBeenCalledWith(
+      expect.stringContaining("Container exit code"),
+    );
+  });
+
   it("computes status inline only when no daemon is reachable", async () => {
     const deps = createDeps();
     deps.requestDaemon = vi.fn(async () => undefined);
@@ -126,6 +167,86 @@ describe("commands", () => {
     );
     expect(error).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prints container logs from a reachable daemon", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      logs: {
+        application: "app",
+        containerState: "exited",
+        text: "boom\n",
+        truncated: false,
+        tail: 200,
+      },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await logs(deps, { application: "app", tail: 200 });
+
+    expect(deps.requestDaemon).toHaveBeenCalledWith({
+      command: "logs",
+      application: "app",
+      tail: 200,
+    });
+    expect(output).toHaveBeenCalledWith("app (container exited)");
+    expect(output).toHaveBeenCalledWith("boom\n");
+  });
+
+  it("says when older log output was dropped", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      logs: {
+        application: "app",
+        containerState: "running",
+        text: "tail\n",
+        truncated: true,
+        tail: 200,
+      },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await logs(deps, { application: "app" });
+
+    expect(output).toHaveBeenCalledWith(
+      "Older output was dropped to stay within the size limit.",
+    );
+  });
+
+  it.each([
+    ["unknown-application" as const, "No such application is registered."],
+    [
+      "no-container" as const,
+      "That application has no container yet. Run a poll first.",
+    ],
+    [
+      "poll-in-progress" as const,
+      "An install is in progress. Try again shortly.",
+    ],
+  ])("explains the %s logs rejection", async (reason, message) => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({ ok: false as const, reason }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await logs(deps, { application: "app" });
+
+    expect(error).toHaveBeenCalledWith(message);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("refuses to read logs without a running daemon", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await logs(deps, { application: "app" });
+
+    expect(error).toHaveBeenCalledWith(
+      "Background service not running. Start it, then run 'piploy logs' again.",
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("delegates poll to a reachable daemon", async () => {
