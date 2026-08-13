@@ -52,6 +52,13 @@ export const containerLogConfig = {
   Config: { "max-size": "10m", "max-file": "3" },
 } as const;
 
+/**
+ * Docker maintains a declared Application container between Polls. A manual
+ * stop remains stopped across a Docker daemon restart, while an unexpected
+ * exit is restarted by Docker.
+ */
+export const containerRestartPolicy = { Name: "unless-stopped" } as const;
+
 export function planImage(existingImage?: DockerImage): ImagePlan {
   return existingImage
     ? { action: "reuse", imageId: existingImage.id }
@@ -71,7 +78,10 @@ export function planContainer(
     existingContainer.gitTipCommit === gitTipCommit &&
     existingContainer.configHash === configHash
   ) {
-    if (existingContainer.state === "running") {
+    if (
+      existingContainer.state === "running" ||
+      existingContainer.state === "restarting"
+    ) {
       return { action: "reuse", containerId: existingContainer.id };
     }
     if (existingContainer.state === "exited") {
@@ -101,6 +111,7 @@ export function getContainerConfigHash(
         left.containerPort - right.containerPort,
     ),
     logConfig: containerLogConfig,
+    restartPolicy: containerRestartPolicy,
   };
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }

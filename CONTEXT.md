@@ -22,7 +22,8 @@ _Avoid_: Add, install, onboard, provision, deploy
 **Poll**:
 One pass in which Piploy brings every Application's repository, image, and
 container back in line with the configuration. Polling is Piploy's only
-trigger; nothing pushes work to it.
+trigger for changing declared Application state; Docker may maintain that
+declared container between Polls. Nothing pushes work to Piploy.
 _Avoid_: Sync, deploy, tick, reconcile loop
 
 **Application data**:
