@@ -39,6 +39,7 @@ containers on a developer machine out of test cleanup.
 | `docker.ts` | dockerode adapter and cleanup | integration, with policy covered by `dockerPlan` unit tests |
 | `orchestrator.ts` | poll sequencing through `OrchestratorDeps` | unit |
 | `status.ts` | pure running-version comparison | unit |
+| `containerLogs.ts` | pure log tail bounds and Docker stream decoding | unit |
 | `settings.ts` | configuration loading and Zod validation | unit |
 | `commands.ts` / `cli.ts` | command wiring | thin existing coverage |
 

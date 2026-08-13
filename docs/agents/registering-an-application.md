@@ -138,7 +138,11 @@ status → approval → register → approval → poll → status
 ```
 
 `register` does not start an Application or trigger a Poll. Never call
-`service-stop` as part of this guide. Do not promise log access or
+`service-stop` as part of this guide. When `status` reports an Application that
+is not running its latest version, its container state tells you why: a
+`restarting` state with a non-zero exit code is a crash loop, and the read-only
+`logs` tool returns that container's recent output. Those logs are unredacted
+and may contain secrets, so treat them as sensitive. Do not promise
 Application-level health checks. If the available MCP results are insufficient,
 ask for explicit human permission before falling back to SSH.
 

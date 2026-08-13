@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs";
 
+import { maxLogTailLines } from "./containerLogs.js";
 import {
   createDaemonDeps,
   requestDaemon,
@@ -60,6 +61,10 @@ export function createCommandDeps(
   };
 }
 
+// Both read-only commands are refused for the same reason while a poll runs,
+// and "install" is the operator-facing word for what a poll does to a Pi.
+const pollInProgressMessage = "An install is in progress. Try again shortly.";
+
 /** The one place a command's failure sets both the message and the exit code. */
 export function commandFailed(message: string): void {
   console.error(message);
@@ -91,6 +96,14 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
     console.log(
       `  Port mappings: ${application.portMappings.length === 0 ? "none" : application.portMappings.map(({ hostPort, containerPort }) => `${hostPort}:${containerPort}`).join(", ")}`,
     );
+    const container = application.docker.container;
+    console.log(`  Container state: ${container?.state ?? "none"}`);
+    if (container) {
+      console.log(
+        `  Container exit code: ${container.exitCode ?? "not exited"}`,
+      );
+      console.log(`  Container restart count: ${container.restartCount}`);
+    }
   }
 }
 
@@ -105,7 +118,7 @@ export async function status(deps: CommandDeps): Promise<void> {
     if (response.reason === "poll-in-progress") {
       console.log(`Piploy version: ${piployVersion}`);
       console.log("Background service: running");
-      console.log("\nAn install is in progress. Try again shortly.");
+      console.log(`\n${pollInProgressMessage}`);
       return;
     }
     commandFailed(`Daemon status request failed: ${response.reason}`);
@@ -116,6 +129,78 @@ export async function status(deps: CommandDeps): Promise<void> {
     return;
   }
   printStatus(response.status, true);
+}
+
+/** The `logs` positional argument and flags, before they reach the daemon. */
+export interface LogsOptions {
+  application: string;
+  tail?: number;
+}
+
+export type ParsedTailOption =
+  { ok: true; tail: number | undefined } | { ok: false; message: string };
+
+/**
+ * Parses `--tail` to the same bounds the MCP tool enforces on its own input,
+ * so a rejected line count fails with a CLI message rather than being quietly
+ * replaced by the default.
+ */
+export function parseTailOption(value: string | undefined): ParsedTailOption {
+  if (value === undefined) return { ok: true, tail: undefined };
+  const tail = Number(value);
+  if (!Number.isInteger(tail) || tail < 1 || tail > maxLogTailLines) {
+    return {
+      ok: false,
+      message: `Invalid --tail '${value}'. It must be a whole number of lines between 1 and ${maxLogTailLines}.`,
+    };
+  }
+  return { ok: true, tail };
+}
+
+const logsFailureMessages: Record<string, string> = {
+  "unknown-application": "No such application is registered.",
+  "no-container": "That application has no container yet. Run a poll first.",
+  "poll-in-progress": pollInProgressMessage,
+};
+
+/**
+ * Prints one Application's container logs. There is no inline fallback: the
+ * logs come from the daemon's Docker adapter, and asking a daemon that is not
+ * running would say nothing useful about a container it did not start.
+ */
+export async function logs(
+  deps: CommandDeps,
+  options: LogsOptions,
+): Promise<void> {
+  const response = await deps.requestDaemon({
+    command: "logs",
+    application: options.application,
+    tail: options.tail,
+  });
+  if (response === undefined) {
+    commandFailed(
+      "Background service not running. Start it, then run 'piploy logs' again.",
+    );
+    return;
+  }
+  if (!response.ok) {
+    commandFailed(
+      logsFailureMessages[response.reason] ??
+        `Daemon logs request failed: ${response.reason}`,
+    );
+    return;
+  }
+  if (!("logs" in response)) {
+    commandFailed("Daemon logs request returned no logs");
+    return;
+  }
+  console.log(
+    `${response.logs.application} (container ${response.logs.containerState}, last ${response.logs.tail} lines)`,
+  );
+  if (response.logs.truncated) {
+    console.log("Older output was dropped to stay within the size limit.");
+  }
+  console.log(response.logs.text);
 }
 
 /** Requests an immediate daemon poll, or reconciles inline when no daemon is running. */

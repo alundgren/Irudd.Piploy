@@ -32,5 +32,11 @@ declared.
   diagnosis. Log bounds are set separately by the container log configuration.
 - Docker is an enforcer of Piploy's declared state, not a second source of
   configuration or an inbound trigger to Piploy.
-- Container logs and detailed restart/exit reporting remain separate
-  observability work.
+- Container logs and restart/exit reporting are read back through `status` and
+  the read-only `logs` tool ([ADR-0008](0008-mcp-server-tailscale-only.md)).
+  Because a crash-looping container is `Running` to Docker while it waits out
+  its restart backoff, Piploy reports the inspected state rather than the list
+  state, so a crash loop is never mistaken for the latest running version.
+- Cleanup removes a container rather than stopping it. Without `AutoRemove` a
+  stop would leave it behind, holding its image and occupying its
+  Application's slot.

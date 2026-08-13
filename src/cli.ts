@@ -3,7 +3,9 @@ import { Command } from "commander";
 import {
   commandFailed,
   createCommandDeps,
+  logs,
   parseRegisterOptions,
+  parseTailOption,
   poll,
   register,
   restartDaemonAfterUpdate,
@@ -14,6 +16,7 @@ import {
   type CommandDeps,
   type RegisterOptions,
 } from "./commands.js";
+import { defaultLogTailLines, maxLogTailLines } from "./containerLogs.js";
 import { requestDaemon } from "./daemon.js";
 import { createLogger, type Logger } from "./logger.js";
 import { loadSettings, resolveConfigPath } from "./settings.js";
@@ -27,6 +30,7 @@ const commandNames = [
   "poll",
   "wipeall",
   "register",
+  "logs",
 ] as const;
 
 function collect(value: string, previous: string[]): string[] {
@@ -60,25 +64,24 @@ function addRegisterOptions(command: Command): Command {
     .option("--json <application>", "the whole Application as JSON");
 }
 
-// Only `register` reads the second argument; the rest are zero-arg commands.
-type CommandAction = (deps: CommandDeps, application: unknown) => Promise<void>;
-
-const actions: Record<(typeof commandNames)[number], CommandAction> = {
+// `register` and `logs` carry a payload, so each is wired to its own action
+// below. Everything else takes nothing but the dependencies.
+const plainActions: Record<
+  Exclude<(typeof commandNames)[number], "register" | "logs">,
+  (deps: CommandDeps) => Promise<void>
+> = {
   status,
   "service-start": serviceStart,
   "service-stop": serviceStop,
   poll,
   wipeall: wipeAll,
-  register,
 };
 
 async function runCommand(
-  commandName: (typeof commandNames)[number],
-  application: unknown,
+  run: (deps: CommandDeps) => Promise<void>,
 ): Promise<void> {
   const settings = loadSettings(resolveConfigPath());
-  const deps = createCommandDeps(settings, createLogger(settings));
-  await actions[commandName](deps, application);
+  await run(createCommandDeps(settings, createLogger(settings)));
 }
 
 function defineCommand(
@@ -86,8 +89,27 @@ function defineCommand(
   commandName: (typeof commandNames)[number],
 ): void {
   const command = program.command(commandName);
+  if (commandName === "logs") {
+    command
+      .argument("<application>", "registered application name")
+      .option(
+        "--tail <lines>",
+        `lines to return (default ${defaultLogTailLines}, maximum ${maxLogTailLines})`,
+      )
+      .action(async (application: string, options: { tail?: string }) => {
+        const parsed = parseTailOption(options.tail);
+        if (!parsed.ok) {
+          commandFailed(parsed.message);
+          return;
+        }
+        await runCommand((deps) =>
+          logs(deps, { application, tail: parsed.tail }),
+        );
+      });
+    return;
+  }
   if (commandName !== "register") {
-    command.action(() => runCommand(commandName, undefined));
+    command.action(() => runCommand(plainActions[commandName]));
     return;
   }
   // Flags are parsed before the configuration is loaded, so bad input fails on
@@ -98,7 +120,7 @@ function defineCommand(
       commandFailed(parsed.message);
       return;
     }
-    await runCommand(commandName, parsed.application);
+    await runCommand((deps) => register(deps, parsed.application));
   });
 }
 

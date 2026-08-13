@@ -4,6 +4,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
+import {
+  defaultLogTailLines,
+  maxLogBytes,
+  maxLogTailLines,
+} from "./containerLogs.js";
 import type { DaemonRequest, DaemonResponse } from "./daemon.js";
 import type { ApplicationSchema } from "./settings.js";
 import { piployVersion } from "./version.js";
@@ -60,7 +65,7 @@ function toolResult(response: DaemonResponse) {
 }
 
 /**
- * Registers the five commands that are safe to expose on the tailnet. The
+ * Registers the six commands that are safe to expose on the tailnet. The
  * exclusion of `wipeall` and `self-update` is structural: they are simply
  * never registered here, so there is no block list to keep in sync.
  */
@@ -71,9 +76,22 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "status",
     {
       description:
-        "Report each registered application's configured host-to-container port mappings (an empty array means none), git commits, Docker image and container hashes, and whether it runs the latest version.",
+        "Report each registered application's configured host-to-container port mappings (an empty array means none), git commits, Docker image and container hashes, whether it runs the latest version, and its container's state, exit code, and restart count. A 'restarting' state with a non-zero exit code means the container is crash-looping.",
     },
     async () => toolResult(await dispatch({ command: "status" })),
+  );
+
+  server.registerTool(
+    "logs",
+    {
+      description: `Read the recent stdout and stderr of one application's container, running or exited. Returns at most ${maxLogTailLines} lines (default ${defaultLogTailLines}) and at most ${maxLogBytes} bytes, keeping the most recent output. Application logs may contain secrets; they are returned unredacted.`,
+      inputSchema: {
+        application: z.string(),
+        tail: z.number().int().min(1).max(maxLogTailLines).optional(),
+      },
+    },
+    async ({ application, tail }) =>
+      toolResult(await dispatch({ command: "logs", application, tail })),
   );
 
   server.registerTool(

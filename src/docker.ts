@@ -3,6 +3,7 @@ import path from "node:path";
 
 import Dockerode from "dockerode";
 
+import { decodeContainerLog, limitLogBytes } from "./containerLogs.js";
 import {
   containerLogConfig,
   containerRestartPolicy,
@@ -38,9 +39,30 @@ export interface EnsureContainerResult {
   containerId: string;
 }
 
+/**
+ * The container occupying an Application's slot, as Docker reports it. This is
+ * what tells `isRunningLatestVersion: false` apart from a container that
+ * crashes on boot: under the `unless-stopped` restart policy (ADR-0009) a
+ * crash loop shows as `restarting` with the last non-zero `exitCode`.
+ */
+export interface ContainerRuntimeStatus {
+  state: string;
+  /** Absent until the container has exited at least once. */
+  exitCode?: number;
+  restartCount: number;
+}
+
 export interface DockerStatus {
   latestImageHash?: string;
   runningContainerHash?: string;
+  container?: ContainerRuntimeStatus;
+}
+
+export interface ContainerLogs {
+  containerState: string;
+  text: string;
+  /** True when the oldest returned bytes were dropped to stay within the cap. */
+  truncated: boolean;
 }
 
 export interface PiployDockerService {
@@ -53,6 +75,11 @@ export interface PiployDockerService {
     commit: GitCommit,
   ): Promise<EnsureContainerResult>;
   getDockerStatus(application: Application): Promise<DockerStatus>;
+  /** Resolves to `undefined` when the Application has no container at all. */
+  getContainerLogs(
+    application: Application,
+    tailLines: number,
+  ): Promise<ContainerLogs | undefined>;
   cleanupInactive(applications: Application[]): Promise<void>;
   cleanupAll(): Promise<void>;
   cleanupTestCreated(): Promise<void>;
@@ -113,6 +140,17 @@ function asDockerContainer(
     gitTipCommit: container.Labels[imageCommitLabelName],
     configHash: container.Labels[containerConfigLabelName],
   };
+}
+
+/**
+ * Whether the container has run and stopped at least once. Docker zeroes
+ * `FinishedAt` for a container that has never run, so `ExitCode` 0 there means
+ * "no exit yet" rather than a clean one.
+ */
+function hasExited(state: Dockerode.ContainerInspectInfo["State"]): boolean {
+  return (
+    (!state.Running || state.Restarting) && Date.parse(state.FinishedAt) > 0
+  );
 }
 
 function isPortAlreadyAllocated(error: unknown): boolean {
@@ -345,13 +383,61 @@ export function createDockerService(
       findImage(getImageVersionTagLatest(application.Name)),
       findContainer(getContainerName(application)),
     ]);
+    const runtime = container
+      ? await inspectRuntimeStatus(container.Id)
+      : undefined;
     return {
       latestImageHash: image?.Labels[imageCommitLabelName],
+      // The inspected state decides this, not the list state: Docker's list
+      // API reports a crash-looping container as running, and calling that the
+      // latest running version is the confusion this whole status exists to
+      // remove.
       runningContainerHash:
-        container?.State === "running"
+        container && runtime?.state === "running"
           ? container.Labels[imageCommitLabelName]
           : undefined,
+      container: runtime,
     };
+  }
+
+  async function inspectRuntimeStatus(
+    containerId: string,
+  ): Promise<ContainerRuntimeStatus> {
+    const { State, RestartCount } = await docker
+      .getContainer(containerId)
+      .inspect();
+    return {
+      state: State.Status,
+      // Docker reports 0 for a container that is running or has never run at
+      // all, which both read as a clean exit. Report the code only once there
+      // has been one. A restarting container is `Running` while Docker waits
+      // out its backoff, and its last exit code is the whole point of asking.
+      exitCode: hasExited(State) ? State.ExitCode : undefined,
+      restartCount: RestartCount,
+    };
+  }
+
+  async function getContainerLogs(
+    application: Application,
+    tailLines: number,
+  ): Promise<ContainerLogs | undefined> {
+    const container = await findContainer(getContainerName(application));
+    if (!container) return undefined;
+
+    // The inspected state, for the same reason `getDockerStatus` uses it: the
+    // list state would label a crash-looping container as running, right above
+    // the output showing it crash.
+    const runtime = await inspectRuntimeStatus(container.Id);
+    // `follow: false` makes dockerode resolve the whole response as a buffer
+    // rather than hand back a live stream, which is what a bounded tail wants.
+    const raw = (await docker.getContainer(container.Id).logs({
+      stdout: true,
+      stderr: true,
+      timestamps: true,
+      tail: tailLines,
+    })) as unknown as Buffer;
+    const { text, truncated } = limitLogBytes(decodeContainerLog(raw));
+    return { containerState: runtime.state, text, truncated };
   }
 
   async function getPiployImages(
@@ -374,10 +460,12 @@ export function createDockerService(
     const containers = (await docker.listContainers({ all: true })).filter(
       (container) => imageIds.has(container.ImageID),
     );
+    // Containers no longer back a declared Application, so they are removed
+    // rather than stopped (ADR-0009). Without `AutoRemove` a stop alone would
+    // leave the container behind, holding a reference to the image below and
+    // occupying its Application's slot indefinitely.
     for (const container of containers) {
-      if (container.State === "running") {
-        await docker.getContainer(container.Id).stop();
-      }
+      await docker.getContainer(container.Id).remove({ force: true });
     }
     for (const image of images) {
       await docker.getImage(image.Id).remove({ force: true });
@@ -411,6 +499,7 @@ export function createDockerService(
     ensureImageExists,
     ensureContainerRunning,
     getDockerStatus,
+    getContainerLogs,
     cleanupInactive,
     cleanupAll,
     cleanupTestCreated,

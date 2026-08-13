@@ -22,8 +22,11 @@ deferred because they add a runtime dependency on the binary or local socket.
 
 ## Exposed tools
 
-The server registers exactly five tools: `status`, `poll`, `register`,
-`service-start`, and `service-stop`. `wipeall` and `self-update` are excluded,
+The server registers exactly six tools: `status`, `logs`, `poll`, `register`,
+`service-start`, and `service-stop`. `logs` belongs here because it is
+read-only; it returns a bounded tail of one Application's container output,
+unredacted, so anything on the tailnet can read whatever that Application
+prints. `wipeall` and `self-update` are excluded,
 and the exclusion is structural — they are simply never registered, so there is
 no block list that could drift out of sync with the command set. `wipeall`
 destroys every container, image, and file Piploy owns; `self-update` replaces
