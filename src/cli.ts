@@ -5,6 +5,7 @@ import {
   createCommandDeps,
   logs,
   parseRegisterOptions,
+  parseTailOption,
   poll,
   register,
   restartDaemonAfterUpdate,
@@ -63,26 +64,24 @@ function addRegisterOptions(command: Command): Command {
     .option("--json <application>", "the whole Application as JSON");
 }
 
-// Only `register` and `logs` read the second argument; the rest are zero-arg.
-type CommandAction = (deps: CommandDeps, payload: never) => Promise<void>;
-
-const actions: Record<(typeof commandNames)[number], CommandAction> = {
+// `register` and `logs` carry a payload, so each is wired to its own action
+// below. Everything else takes nothing but the dependencies.
+const plainActions: Record<
+  Exclude<(typeof commandNames)[number], "register" | "logs">,
+  (deps: CommandDeps) => Promise<void>
+> = {
   status,
   "service-start": serviceStart,
   "service-stop": serviceStop,
   poll,
   wipeall: wipeAll,
-  register,
-  logs,
 };
 
 async function runCommand(
-  commandName: (typeof commandNames)[number],
-  payload: unknown,
+  run: (deps: CommandDeps) => Promise<void>,
 ): Promise<void> {
   const settings = loadSettings(resolveConfigPath());
-  const deps = createCommandDeps(settings, createLogger(settings));
-  await actions[commandName](deps, payload as never);
+  await run(createCommandDeps(settings, createLogger(settings)));
 }
 
 function defineCommand(
@@ -98,18 +97,19 @@ function defineCommand(
         `lines to return (default ${defaultLogTailLines}, maximum ${maxLogTailLines})`,
       )
       .action(async (application: string, options: { tail?: string }) => {
-        const tail =
-          options.tail === undefined ? undefined : Number(options.tail);
-        if (tail !== undefined && !Number.isInteger(tail)) {
-          commandFailed("Invalid --tail. It must be a whole number of lines.");
+        const parsed = parseTailOption(options.tail);
+        if (!parsed.ok) {
+          commandFailed(parsed.message);
           return;
         }
-        await runCommand(commandName, { application, tail });
+        await runCommand((deps) =>
+          logs(deps, { application, tail: parsed.tail }),
+        );
       });
     return;
   }
   if (commandName !== "register") {
-    command.action(() => runCommand(commandName, undefined));
+    command.action(() => runCommand(plainActions[commandName]));
     return;
   }
   // Flags are parsed before the configuration is loaded, so bad input fails on
@@ -120,7 +120,7 @@ function defineCommand(
       commandFailed(parsed.message);
       return;
     }
-    await runCommand(commandName, parsed.application);
+    await runCommand((deps) => register(deps, parsed.application));
   });
 }
 

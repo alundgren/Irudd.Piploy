@@ -47,11 +47,9 @@ export interface EnsureContainerResult {
  */
 export interface ContainerRuntimeStatus {
   state: string;
-  /** Absent while the container is running; it has not exited yet. */
+  /** Absent until the container has exited at least once. */
   exitCode?: number;
   restartCount: number;
-  startedAt?: string;
-  finishedAt?: string;
 }
 
 export interface DockerStatus {
@@ -142,6 +140,17 @@ function asDockerContainer(
     gitTipCommit: container.Labels[imageCommitLabelName],
     configHash: container.Labels[containerConfigLabelName],
   };
+}
+
+/**
+ * Whether the container has run and stopped at least once. Docker zeroes
+ * `FinishedAt` for a container that has never run, so `ExitCode` 0 there means
+ * "no exit yet" rather than a clean one.
+ */
+function hasExited(state: Dockerode.ContainerInspectInfo["State"]): boolean {
+  return (
+    (!state.Running || state.Restarting) && Date.parse(state.FinishedAt) > 0
+  );
 }
 
 function isPortAlreadyAllocated(error: unknown): boolean {
@@ -399,14 +408,12 @@ export function createDockerService(
       .inspect();
     return {
       state: State.Status,
-      // Docker reports 0 for a container that has not exited yet, which reads
-      // as a clean exit. Report the code only once there has been one. A
-      // restarting container is `Running` while Docker waits out its backoff,
-      // and its exit code is the whole point of asking, so it counts as exited.
-      exitCode: State.Running && !State.Restarting ? undefined : State.ExitCode,
+      // Docker reports 0 for a container that is running or has never run at
+      // all, which both read as a clean exit. Report the code only once there
+      // has been one. A restarting container is `Running` while Docker waits
+      // out its backoff, and its last exit code is the whole point of asking.
+      exitCode: hasExited(State) ? State.ExitCode : undefined,
       restartCount: RestartCount,
-      startedAt: State.StartedAt,
-      finishedAt: State.FinishedAt,
     };
   }
 
@@ -417,6 +424,10 @@ export function createDockerService(
     const container = await findContainer(getContainerName(application));
     if (!container) return undefined;
 
+    // The inspected state, for the same reason `getDockerStatus` uses it: the
+    // list state would label a crash-looping container as running, right above
+    // the output showing it crash.
+    const runtime = await inspectRuntimeStatus(container.Id);
     // `follow: false` makes dockerode resolve the whole response as a buffer
     // rather than hand back a live stream, which is what a bounded tail wants.
     const raw = (await docker.getContainer(container.Id).logs({
@@ -426,7 +437,7 @@ export function createDockerService(
       tail: tailLines,
     })) as unknown as Buffer;
     const { text, truncated } = limitLogBytes(decodeContainerLog(raw));
-    return { containerState: container.State, text, truncated };
+    return { containerState: runtime.state, text, truncated };
   }
 
   async function getPiployImages(

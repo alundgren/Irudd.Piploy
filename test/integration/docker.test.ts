@@ -109,7 +109,7 @@ describe("docker adapter", () => {
       wasStarted: false,
       containerId: started.containerId,
     });
-    expect(await docker.getDockerStatus(application)).toMatchObject({
+    expect(await docker.getDockerStatus(application)).toEqual({
       latestImageHash: commit.hash,
       runningContainerHash: commit.hash,
       container: { state: "running", exitCode: undefined, restartCount: 0 },

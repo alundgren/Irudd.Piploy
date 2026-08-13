@@ -81,4 +81,18 @@ describe("limitLogBytes", () => {
     );
     expect(result.text.endsWith("TAIL")).toBe(true);
   });
+
+  it("drops the partly cut line rather than starting mid-line", () => {
+    const text = `${"x".repeat(maxLogBytes)}\nkept\nalso kept\n`;
+    expect(limitLogBytes(text).text).toBe("kept\nalso kept\n");
+  });
+
+  it("never opens with half a multi-byte character", () => {
+    // One unbroken line, so there is no line break to fall forward to.
+    const text = "å".repeat(maxLogBytes);
+    const result = limitLogBytes(text);
+    expect(result.truncated).toBe(true);
+    expect(result.text).not.toContain("�");
+    expect(result.text.startsWith("å")).toBe(true);
+  });
 });

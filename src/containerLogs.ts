@@ -9,8 +9,8 @@ export const maxLogTailLines = 2000;
 export const maxLogBytes = 256 * 1024;
 
 const frameHeaderBytes = 8;
-const stdinStream = 0;
 const stderrStream = 2;
+const newline = 0x0a;
 
 /** Clamps a caller's requested tail; anything unusable falls back to the default. */
 export function resolveTailLines(requested: number | undefined): number {
@@ -24,8 +24,7 @@ function readFrames(buffer: Buffer): string | undefined {
   let offset = 0;
   while (offset < buffer.length) {
     if (offset + frameHeaderBytes > buffer.length) return undefined;
-    const streamType = buffer.readUInt8(offset);
-    if (streamType < stdinStream || streamType > stderrStream) return undefined;
+    if (buffer.readUInt8(offset) > stderrStream) return undefined;
     const length = buffer.readUInt32BE(offset + 4);
     const start = offset + frameHeaderBytes;
     const end = start + length;
@@ -46,15 +45,30 @@ export function decodeContainerLog(buffer: Buffer): string {
   return readFrames(buffer) ?? buffer.toString("utf8");
 }
 
-/** Caps the returned output, keeping the most recent bytes. */
+/**
+ * Caps the returned output, keeping the most recent bytes. The cut is moved
+ * forward to the next line break so it cannot land inside a multi-byte
+ * character and open the output with a replacement character.
+ */
 export function limitLogBytes(text: string): {
   text: string;
   truncated: boolean;
 } {
   const buffer = Buffer.from(text, "utf8");
   if (buffer.length <= maxLogBytes) return { text, truncated: false };
-  return {
-    text: buffer.subarray(buffer.length - maxLogBytes).toString("utf8"),
-    truncated: true,
-  };
+
+  const cut = buffer.length - maxLogBytes;
+  const lineBreak = buffer.indexOf(newline, cut);
+  // One unbroken line longer than the cap has no line break to fall forward
+  // to, so the boundary is found at the character level instead.
+  const start =
+    lineBreak === -1 ? startOfCharacter(buffer, cut) : lineBreak + 1;
+  return { text: buffer.subarray(start).toString("utf8"), truncated: true };
+}
+
+function startOfCharacter(buffer: Buffer, offset: number): number {
+  let start = offset;
+  // UTF-8 continuation bytes are 10xxxxxx; skipping them lands on a lead byte.
+  while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1;
+  return start;
 }

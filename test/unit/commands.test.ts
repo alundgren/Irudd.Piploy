@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   logs,
   parseRegisterOptions,
+  parseTailOption,
   poll,
   register,
   restartDaemonAfterUpdate,
@@ -190,7 +191,9 @@ describe("commands", () => {
       application: "app",
       tail: 200,
     });
-    expect(output).toHaveBeenCalledWith("app (container exited)");
+    expect(output).toHaveBeenCalledWith(
+      "app (container exited, last 200 lines)",
+    );
     expect(output).toHaveBeenCalledWith("boom\n");
   });
 
@@ -248,6 +251,22 @@ describe("commands", () => {
     );
     expect(process.exitCode).toBe(1);
   });
+
+  it.each([undefined, "1", "2000"])("accepts the tail option %s", (value) => {
+    expect(parseTailOption(value)).toEqual({
+      ok: true,
+      tail: value === undefined ? undefined : Number(value),
+    });
+  });
+
+  it.each(["0", "-5", "1.5", "2001", "all"])(
+    "rejects the tail option %s before contacting the daemon",
+    (value) => {
+      const parsed = parseTailOption(value);
+      expect(parsed.ok).toBe(false);
+      expect(parsed.ok ? "" : parsed.message).toContain("between 1 and 2000");
+    },
+  );
 
   it("delegates poll to a reachable daemon", async () => {
     const deps = createDeps();
