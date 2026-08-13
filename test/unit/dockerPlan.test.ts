@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -49,6 +51,21 @@ describe("planContainer", () => {
         {
           id: "container",
           state: "running",
+          gitTipCommit: "commit",
+          configHash,
+        },
+        "commit",
+        configHash,
+      ),
+    ).toEqual({ action: "reuse", containerId: "container" });
+  });
+
+  it("leaves a matching container to Docker while it is restarting", () => {
+    expect(
+      planContainer(
+        {
+          id: "container",
+          state: "restarting",
           gitTipCommit: "commit",
           configHash,
         },
@@ -112,6 +129,24 @@ describe("planContainer", () => {
         ],
       }),
     );
+  });
+
+  it("changes the hash of containers created before the restart policy", () => {
+    const previousHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          environmentVariables: [],
+          volumes: [],
+          portMappings: [],
+          logConfig: {
+            Type: "json-file",
+            Config: { "max-size": "10m", "max-file": "3" },
+          },
+        }),
+      )
+      .digest("hex");
+
+    expect(getContainerConfigHash({})).not.toBe(previousHash);
   });
 });
 

@@ -5,6 +5,7 @@ import Dockerode from "dockerode";
 
 import {
   containerLogConfig,
+  containerRestartPolicy,
   getContainerConfigHash,
   getDockerfilePathFromSetting,
   planContainer,
@@ -313,8 +314,8 @@ export function createDockerService(
       HostConfig: {
         PortBindings: portBindings,
         Binds: binds,
-        AutoRemove: true,
         LogConfig: containerLogConfig,
+        RestartPolicy: containerRestartPolicy,
       },
       Labels: { [containerConfigLabelName]: configHash },
     });

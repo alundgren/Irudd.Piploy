@@ -86,6 +86,10 @@ describe("docker adapter", () => {
       Type: "json-file",
       Config: { "max-size": "10m", "max-file": "3" },
     });
+    expect(inspect.HostConfig.AutoRemove).toBe(false);
+    expect(inspect.HostConfig.RestartPolicy).toMatchObject({
+      Name: "unless-stopped",
+    });
     expect(inspect.Config.Labels?.piploy_configHash).toBe(
       getContainerConfigHash({
         environmentVariables: ["DATABASE_PATH=/app/data/app.db"],
