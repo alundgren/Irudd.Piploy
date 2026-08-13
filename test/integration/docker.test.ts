@@ -82,6 +82,10 @@ describe("docker adapter", () => {
     expect(inspect.HostConfig.Binds).toContain(
       `${path.join(temporaryDirectory, "data", application.Name, "sqlite")}:/app/data`,
     );
+    expect(inspect.HostConfig.LogConfig).toEqual({
+      Type: "json-file",
+      Config: { "max-size": "10m", "max-file": "3" },
+    });
     expect(inspect.Config.Labels?.piploy_configHash).toBe(
       getContainerConfigHash({
         environmentVariables: ["DATABASE_PATH=/app/data/app.db"],

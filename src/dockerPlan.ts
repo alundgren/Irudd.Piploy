@@ -41,6 +41,17 @@ export interface DockerfileImageReferenceViolation {
 const invalidDockerfilePathMessage =
   "Invalid DockerfilePath. It must point to a dockerfile relative to the repository root. Examples: 'Dockerfile' or 'SubDirectory/Dockerfile' or Dockerfile.custom'";
 
+/**
+ * Bounds the container log files so a long running application cannot fill the
+ * host disk. Docker rotates and drops the oldest file itself, so nothing in
+ * Piploy has to sweep them. This is part of the container config hash, so
+ * containers created before the cap existed are recreated on the next poll.
+ */
+export const containerLogConfig = {
+  Type: "json-file",
+  Config: { "max-size": "10m", "max-file": "3" },
+} as const;
+
 export function planImage(existingImage?: DockerImage): ImagePlan {
   return existingImage
     ? { action: "reuse", imageId: existingImage.id }
@@ -89,6 +100,7 @@ export function getContainerConfigHash(
         left.hostPort - right.hostPort ||
         left.containerPort - right.containerPort,
     ),
+    logConfig: containerLogConfig,
   };
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
