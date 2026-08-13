@@ -7,7 +7,10 @@ import { getCommitStatus, type GitCommitStatus } from "./git.js";
 import type { Logger } from "./logger.js";
 import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
 import { getTailscaleAddress } from "./mcpTailscale.js";
-import { createOrchestrator } from "./orchestrator.js";
+import {
+  createOrchestrator,
+  type PollApplicationResult,
+} from "./orchestrator.js";
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
 import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
 import {
@@ -33,6 +36,7 @@ export type DaemonRequest =
 
 export type DaemonResponse =
   | { ok: true; status: DaemonStatus }
+  | { ok: true; applications: PollApplicationResult[] }
   | { ok: true; application: Application }
   | { ok: true }
   | {
@@ -55,7 +59,7 @@ export interface DaemonStatus {
 }
 
 export interface DaemonDeps {
-  poll(): Promise<void>;
+  poll(): Promise<PollApplicationResult[]>;
   getStatus(): Promise<DaemonStatus>;
   attemptSelfUpdate(): Promise<SelfUpdateResult>;
 }
@@ -327,11 +331,10 @@ export async function startDaemon(
         case "poll":
           pollInProgress = true;
           try {
-            await deps.poll();
+            return { ok: true, applications: await deps.poll() };
           } finally {
             pollInProgress = false;
           }
-          return { ok: true };
       }
     } catch (error) {
       logError(logger, error);

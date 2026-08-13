@@ -11,6 +11,7 @@ import {
 } from "./daemon.js";
 import { createDockerService } from "./docker.js";
 import type { Logger } from "./logger.js";
+import type { PollApplicationResult } from "./orchestrator.js";
 import type { PiploySettings } from "./settings.js";
 import {
   getApplicationDataDirectory,
@@ -25,7 +26,7 @@ export type RegisterResult = DaemonResponse | undefined;
 export interface CommandDeps {
   requestDaemon(request: DaemonRequest): Promise<DaemonResponse | undefined>;
   computeStatusInline(): Promise<DaemonStatus>;
-  pollInline(): Promise<void>;
+  pollInline(): Promise<PollApplicationResult[]>;
   register(application: unknown): Promise<RegisterResult>;
   wipeAll(): Promise<void>;
   getPreservedApplicationDataDirectories(): string[];
@@ -121,15 +122,32 @@ export async function status(deps: CommandDeps): Promise<void> {
 export async function poll(deps: CommandDeps): Promise<void> {
   const response = await deps.requestDaemon({ command: "poll" });
   if (response === undefined) {
-    await deps.pollInline();
-    console.log("Poll completed.");
+    printPollResult(await deps.pollInline());
     return;
   }
   if (!response.ok) {
     commandFailed(`Daemon poll request failed: ${response.reason}`);
     return;
   }
+  if ("applications" in response) {
+    printPollResult(response.applications);
+    return;
+  }
   console.log("Poll completed.");
+}
+
+function printPollResult(applications: PollApplicationResult[]): void {
+  const failures = applications.filter((application) => !application.ok);
+  if (failures.length === 0) {
+    console.log("Poll completed.");
+    return;
+  }
+  console.log("Poll completed with failures:");
+  for (const failure of failures) {
+    console.log(
+      `  ${failure.application} (${failure.stage}): ${failure.message}`,
+    );
+  }
 }
 
 /** The `register` flags commander collects, before they become an Application. */

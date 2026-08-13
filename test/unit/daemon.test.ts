@@ -80,7 +80,7 @@ describe("daemon", () => {
 
   it("serves daemon-computed status over a private socket", async () => {
     const daemon = await start({
-      poll: async () => {},
+      poll: async () => [],
       getStatus: async () => ({
         applications: [
           {
@@ -114,6 +114,26 @@ describe("daemon", () => {
     });
   });
 
+  it("returns per-application poll results over the private socket", async () => {
+    const applications = [
+      {
+        application: "app",
+        ok: false as const,
+        stage: "build" as const,
+        message: "build failed",
+      },
+    ];
+    const daemon = await start({
+      poll: async () => applications,
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+
+    await expect(
+      requestDaemon({ command: "poll" }, daemon.socketPath),
+    ).resolves.toEqual({ ok: true, applications });
+  });
+
   it("runs poll requests serially and rejects a client when its queue is full", async () => {
     let releaseFirstPoll: (() => void) | undefined;
     const firstPoll = new Promise<void>((resolve) => {
@@ -125,6 +145,7 @@ describe("daemon", () => {
         poll: async () => {
           polls += 1;
           if (polls === 2) await firstPoll;
+          return [];
         },
         getStatus: async () => ({ applications: [] }),
         attemptSelfUpdate: async () => "up-to-date",
@@ -144,8 +165,8 @@ describe("daemon", () => {
     });
 
     releaseFirstPoll!();
-    await expect(first).resolves.toEqual({ ok: true });
-    await expect(second).resolves.toEqual({ ok: true });
+    await expect(first).resolves.toEqual({ ok: true, applications: [] });
+    await expect(second).resolves.toEqual({ ok: true, applications: [] });
     expect(polls).toBe(3);
   });
 
@@ -157,6 +178,7 @@ describe("daemon", () => {
     const daemon = await start({
       poll: async () => {
         await pollGate;
+        return [];
       },
       getStatus: async () => ({ applications: [] }),
       attemptSelfUpdate: async () => "up-to-date",
@@ -170,12 +192,12 @@ describe("daemon", () => {
     ).resolves.toEqual({ ok: false, reason: "poll-in-progress" });
 
     releasePoll!();
-    await expect(poll).resolves.toEqual({ ok: true });
+    await expect(poll).resolves.toEqual({ ok: true, applications: [] });
   });
 
   it("rejects malformed requests", async () => {
     const daemon = await start({
-      poll: async () => {},
+      poll: async () => [],
       getStatus: async () => ({ applications: [] }),
       attemptSelfUpdate: async () => "up-to-date",
     });
@@ -193,7 +215,7 @@ describe("daemon", () => {
       return undefined as never;
     }) as typeof process.exit);
     const daemon = await start({
-      poll: async () => {},
+      poll: async () => [],
       getStatus: async () => ({ applications: [] }),
       attemptSelfUpdate: async () => "up-to-date",
     });
@@ -235,6 +257,7 @@ describe("daemon", () => {
           },
           poll: async () => {
             events.push("poll");
+            return [];
           },
           getStatus: async () => ({ applications: [] }),
         },
@@ -265,6 +288,7 @@ describe("daemon", () => {
       },
       poll: async () => {
         events.push("poll");
+        return [];
       },
       getStatus: async () => ({ applications: [] }),
     });
@@ -313,7 +337,7 @@ describe("daemon", () => {
 
     function idleDeps(): DaemonDeps {
       return {
-        poll: async () => {},
+        poll: async () => [],
         getStatus: async () => ({ applications: [] }),
         attemptSelfUpdate: async () => "up-to-date",
       };
@@ -393,6 +417,7 @@ describe("daemon", () => {
         ...idleDeps(),
         poll: async () => {
           polls += 1;
+          return [];
         },
       });
       // The daemon polls once at startup; register must not add another.
@@ -420,6 +445,7 @@ describe("daemon", () => {
         poll: async () => {
           await pollGate;
           events.push("poll");
+          return [];
         },
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -505,7 +531,7 @@ describe("daemon", () => {
       const { daemon, messages } = await startWithAddress(
         undefined,
         {
-          poll: async () => {},
+          poll: async () => [],
           getStatus: async () => ({ applications: [] }),
           attemptSelfUpdate: async () => "up-to-date",
         },
@@ -529,6 +555,7 @@ describe("daemon", () => {
       const { messages } = await startWithAddress("127.0.0.1", {
         poll: async () => {
           events.push("poll");
+          return [];
         },
         getStatus: async () => ({ applications: [] }),
         attemptSelfUpdate: async () => "up-to-date",
