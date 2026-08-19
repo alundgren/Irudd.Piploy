@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   getVolumeDirectory,
   loadSettings,
   parseSettings,
+  registerApplication,
   resolveBundleDirectory,
   resolveConfigPath,
 } from "../../src/settings.js";
@@ -216,6 +217,44 @@ describe("parseSettings", () => {
     expect(settings.Applications[0]?.EnvironmentVariables).toEqual({
       DATABASE_PATH: "/app/data/app.db",
     });
+  });
+
+  it("preserves an exact host-environment reference in parsed settings", () => {
+    const settings = parseSettings({
+      Piploy: {
+        RootDirectory: "/root",
+        Applications: [
+          {
+            ...validApplication,
+            EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
+          },
+        ],
+      },
+    });
+
+    expect(settings.Applications[0]?.EnvironmentVariables).toEqual({
+      TOKEN: "${hostEnv:CONTAINER_TOKEN}",
+    });
+  });
+
+  it("persists a host-environment reference unchanged when registering", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-settings-"));
+    const configPath = path.join(directory, "piploy.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({ Piploy: { RootDirectory: "/root", Applications: [] } }),
+    );
+    const rawApplication = {
+      ...validApplication,
+      EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
+    };
+
+    registerApplication(configPath, rawApplication);
+
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
+      Piploy: { Applications: unknown[] };
+    };
+    expect(persisted.Piploy.Applications).toEqual([rawApplication]);
   });
 });
 

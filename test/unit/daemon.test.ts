@@ -375,6 +375,7 @@ describe("daemon", () => {
       GitRepositoryUrl: "https://example.com/app.git",
       DockerfilePath: "Dockerfile",
       PortMappings: ["8080:80"],
+      EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
     };
 
     async function startWithConfig(
@@ -433,6 +434,7 @@ describe("daemon", () => {
           GitRepositoryUrl: "https://example.com/app.git",
           DockerfilePath: "Dockerfile",
           PortMappings: [{ hostPort: 8080, containerPort: 80 }],
+          EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
         },
       });
 

@@ -11,6 +11,7 @@ import {
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
+  resolveContainerEnvironmentVariables,
   type DockerContainer,
   validateDockerfileImageReferences,
 } from "./dockerPlan.js";
@@ -293,11 +294,11 @@ export function createDockerService(
       (volume) =>
         `${getVolumeDirectory(application, volume)}:${volume.containerPath}`,
     );
-    const environment = Object.entries(
+    const declaredEnvironment = Object.entries(
       application.EnvironmentVariables ?? {},
     ).map(([name, value]) => `${name}=${value}`);
     const configHash = getContainerConfigHash({
-      environmentVariables: environment,
+      environmentVariables: declaredEnvironment,
       volumes: binds,
       portMappings: application.PortMappings,
     });
@@ -323,6 +324,14 @@ export function createDockerService(
         containerId: containerPlan.containerId,
       };
     }
+
+    // Resolve only after planning proves that Docker must create a new
+    // container. In particular, an unset host value must not disturb the
+    // existing container that a failed recreation would otherwise replace.
+    const environment = resolveContainerEnvironmentVariables(
+      application.EnvironmentVariables ?? {},
+      process.env,
+    );
 
     if (containerPlan.existingContainerId) {
       logger.info(`Removing container ${containerName}`);
