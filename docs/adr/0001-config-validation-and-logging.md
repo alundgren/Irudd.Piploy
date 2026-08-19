@@ -13,8 +13,15 @@ configuration is parsed. Volumes are validated as
 `<name>:/container/path` and likewise converted to typed names and container
 paths; host paths, `..`, the container root, a second colon — which Docker
 would read as mount options — and two Volumes of one Application sharing a
-container path are all rejected. Environment variables are passed to Docker
-verbatim, without interpolation.
+container path are all rejected. Environment-variable values are literals,
+except that an entire value exactly matching `${hostEnv:NAME}` (where `NAME`
+uses letters, digits, and underscores and does not start with a digit) is a
+reference to the daemon's host environment. Piploy persists that reference,
+uses the reference itself in its container identity, and resolves it only when
+it is about to create or recreate a container. It never writes the resolved
+value to its normal diagnostics. A daemon-environment change takes effect only
+after restarting the daemon and a later configuration- or commit-driven
+container recreation; all other interpolation-like strings remain literal.
 
 `RootDirectory` is rejected when it overlaps the data directory in either
 direction, because `wipeall` deletes `RootDirectory` recursively and

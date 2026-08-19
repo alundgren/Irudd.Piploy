@@ -21,6 +21,9 @@ export interface ContainerConfiguration {
   }[];
 }
 
+const hostEnvironmentReferencePattern =
+  /^\$\{hostEnv:([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
 export type ImagePlan =
   { action: "reuse"; imageId: string } | { action: "build" };
 
@@ -118,6 +121,33 @@ export function getContainerConfigHash(
     restartPolicy: containerRestartPolicy,
   };
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+/**
+ * Converts the declared environment into Docker's `KEY=VALUE` form. A host
+ * environment reference is deliberately recognized only when it is the whole
+ * value, so every other string remains a literal configuration value.
+ *
+ * The host environment is an argument rather than an implicit global so this
+ * policy stays deterministic and Docker decides when it is safe to read it.
+ */
+export function resolveContainerEnvironmentVariables(
+  environmentVariables: Readonly<Record<string, string>>,
+  hostEnvironment: Readonly<Record<string, string | undefined>>,
+): string[] {
+  return Object.entries(environmentVariables).map(([name, value]) => {
+    const match = hostEnvironmentReferencePattern.exec(value);
+    if (!match) return `${name}=${value}`;
+
+    const hostEnvironmentName = match[1]!;
+    const resolvedValue = hostEnvironment[hostEnvironmentName];
+    if (resolvedValue === undefined) {
+      throw new Error(
+        `Host environment variable '${hostEnvironmentName}' is not set`,
+      );
+    }
+    return `${name}=${resolvedValue}`;
+  });
 }
 
 /** Converts the config setting into a Docker build context and its Dockerfile. */

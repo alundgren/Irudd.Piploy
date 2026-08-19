@@ -11,9 +11,10 @@ import { getContainerConfigHash } from "../../src/dockerPlan.js";
 import type { Logger } from "../../src/logger.js";
 import type { PiploySettings } from "../../src/settings.js";
 
+const loggedMessages: string[] = [];
 const logger: Logger = {
   debug: () => {},
-  info: () => {},
+  info: (message) => loggedMessages.push(message),
   warn: () => {},
   error: () => {},
   child: () => logger,
@@ -24,6 +25,11 @@ const temporaryDirectory = await mkdtemp(
 );
 const originalConfigPath = process.env.PIPLOY_CONFIG;
 process.env.PIPLOY_CONFIG = path.join(temporaryDirectory, "piploy.json");
+const hostEnvironmentName = `PIPLOY_HOST_ENV_${crypto.randomUUID().replaceAll("-", "")}`;
+const hostEnvironmentSecret = "test-host-environment-secret";
+const originalHostEnvironmentValue = process.env[hostEnvironmentName];
+process.env[hostEnvironmentName] = hostEnvironmentSecret;
+const hostEnvironmentReference = `\${hostEnv:${hostEnvironmentName}}`;
 const applicationName = `integration${crypto.randomUUID().replaceAll("-", "")}`;
 const commit = { hash: crypto.randomUUID().replaceAll("-", "") };
 const application = {
@@ -31,7 +37,10 @@ const application = {
   GitRepositoryUrl: "https://example.invalid/integration.git",
   DockerfilePath: "Dockerfile",
   Volumes: [{ name: "sqlite", containerPath: "/app/data" }],
-  EnvironmentVariables: { DATABASE_PATH: "/app/data/app.db" },
+  EnvironmentVariables: {
+    DATABASE_PATH: "/app/data/app.db",
+    HOST_ENV_TOKEN: hostEnvironmentReference,
+  },
 };
 const crashingCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
 const crashingApplication = {
@@ -57,6 +66,11 @@ afterAll(async () => {
   await rm(temporaryDirectory, { recursive: true, force: true });
   if (originalConfigPath === undefined) delete process.env.PIPLOY_CONFIG;
   else process.env.PIPLOY_CONFIG = originalConfigPath;
+  if (originalHostEnvironmentValue === undefined) {
+    delete process.env[hostEnvironmentName];
+  } else {
+    process.env[hostEnvironmentName] = originalHostEnvironmentValue;
+  }
 });
 
 describe("docker adapter", () => {
@@ -91,6 +105,9 @@ describe("docker adapter", () => {
       .getContainer(started.containerId)
       .inspect();
     expect(inspect.Config.Env).toContain("DATABASE_PATH=/app/data/app.db");
+    expect(inspect.Config.Env).toContain(
+      `HOST_ENV_TOKEN=${hostEnvironmentSecret}`,
+    );
     expect(inspect.HostConfig.Binds).toContain(
       `${path.join(temporaryDirectory, "data", application.Name, "sqlite")}:/app/data`,
     );
@@ -104,7 +121,10 @@ describe("docker adapter", () => {
     });
     expect(inspect.Config.Labels?.piploy_configHash).toBe(
       getContainerConfigHash({
-        environmentVariables: ["DATABASE_PATH=/app/data/app.db"],
+        environmentVariables: [
+          "DATABASE_PATH=/app/data/app.db",
+          `HOST_ENV_TOKEN=${hostEnvironmentReference}`,
+        ],
         volumes: [
           `${path.join(temporaryDirectory, "data", application.Name, "sqlite")}:/app/data`,
         ],
@@ -115,6 +135,7 @@ describe("docker adapter", () => {
       wasStarted: false,
       containerId: started.containerId,
     });
+    expect(loggedMessages.join("\n")).not.toContain(hostEnvironmentSecret);
     expect(await docker.getDockerStatus(application)).toEqual({
       latestImageHash: commit.hash,
       runningContainerHash: commit.hash,
@@ -125,6 +146,36 @@ describe("docker adapter", () => {
     expect(logs?.containerState).toBe("running");
     expect(logs?.text).toContain("hello-from-piploy");
     expect(logs?.truncated).toBe(false);
+
+    // Reuse and start make no host-environment read, while a failed recreate
+    // checks before removing the current container.
+    delete process.env[hostEnvironmentName];
+    expect(await docker.ensureContainerRunning(application, commit)).toEqual({
+      wasCreated: false,
+      wasStarted: false,
+      containerId: started.containerId,
+    });
+    await new Dockerode().getContainer(started.containerId).stop();
+    expect(await docker.ensureContainerRunning(application, commit)).toEqual({
+      wasCreated: false,
+      wasStarted: true,
+      containerId: started.containerId,
+    });
+    await expect(
+      docker.ensureContainerRunning(application, {
+        hash: crypto.randomUUID().replaceAll("-", ""),
+      }),
+    ).rejects.toThrow(
+      `Host environment variable '${hostEnvironmentName}' is not set`,
+    );
+    const afterFailedRecreation = await new Dockerode()
+      .getContainer(started.containerId)
+      .inspect();
+    expect(afterFailedRecreation.Id).toBe(started.containerId);
+    expect(loggedMessages.join("\n")).not.toContain(hostEnvironmentSecret);
+    expect(
+      JSON.stringify(await docker.getDockerStatus(application)),
+    ).not.toContain(hostEnvironmentSecret);
 
     await docker.cleanupTestCreated();
     expect(await docker.getDockerStatus(application)).toEqual({});

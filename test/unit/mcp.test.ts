@@ -170,6 +170,7 @@ describe("mcp server", () => {
       DockerfilePath: "Dockerfile",
       BuildContextPath: "services/app",
       PortMappings: ["8080:80"],
+      EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
     };
     const { client, requests } = await start((request) =>
       request.command === "register"

@@ -481,7 +481,7 @@ describe("parseRegisterOptions", () => {
       buildContextPath: "services/app",
       portMapping: ["8080:80", "8443:443"],
       volume: ["data:/var/lib/app"],
-      env: ["A=1", "B=x=y"],
+      env: ["A=1", "B=${hostEnv:CONTAINER_TOKEN}"],
     });
 
     expect(parsed).toEqual({
@@ -491,7 +491,7 @@ describe("parseRegisterOptions", () => {
         BuildContextPath: "services/app",
         PortMappings: ["8080:80", "8443:443"],
         Volumes: ["data:/var/lib/app"],
-        EnvironmentVariables: { A: "1", B: "x=y" },
+        EnvironmentVariables: { A: "1", B: "${hostEnv:CONTAINER_TOKEN}" },
       },
     });
   });
