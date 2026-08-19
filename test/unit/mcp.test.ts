@@ -168,6 +168,7 @@ describe("mcp server", () => {
       Name: "app",
       GitRepositoryUrl: "https://example.com/app.git",
       DockerfilePath: "Dockerfile",
+      BuildContextPath: "services/app",
       PortMappings: ["8080:80"],
       EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
     };

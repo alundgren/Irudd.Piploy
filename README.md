@@ -94,18 +94,18 @@ The daemon's control socket is created with `0600` permissions and owned by the
 user the daemon runs as, so the commands below must run as that same user to
 reach it. Another user gets the offline fallback described under `status`.
 
-| Command         | What it does                                                                                                                                       |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command         | What it does                                                                                                                                                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status`        | Prints the Piploy version, whether the background service is reachable, and per-application configured host-to-container port mappings, Git, and Docker state, including the container's state, exit code, and restart count. |
-| `logs`          | Prints one application's recent container output, running or exited. `--tail <lines>` sets how much. Requires the daemon to be running.            |
-| `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                 |
-| `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                    |
-| `service-stop`  | Asks the running daemon to shut down.                                                                                                              |
-| `register`      | Adds one application to `piploy.json` and to the running daemon, so the next poll deploys it without a restart. Requires the daemon to be running. |
-| `wipeall`       | Removes all Piploy containers and images and deletes the root directory. Application data is preserved and its paths are printed.                  |
-| `self-update`   | Checks GitHub for a newer release, installs it, then restarts the running daemon through its control socket.                                      |
-| `--version`     | Prints the running bundle's version.                                                                                                               |
-| `--help`        | Lists the commands.                                                                                                                                |
+| `logs`          | Prints one application's recent container output, running or exited. `--tail <lines>` sets how much. Requires the daemon to be running.                                                                                       |
+| `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                                                                                            |
+| `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                                                                                               |
+| `service-stop`  | Asks the running daemon to shut down.                                                                                                                                                                                         |
+| `register`      | Adds one application to `piploy.json` and to the running daemon, so the next poll deploys it without a restart. Requires the daemon to be running.                                                                            |
+| `wipeall`       | Removes all Piploy containers and images and deletes the root directory. Application data is preserved and its paths are printed.                                                                                             |
+| `self-update`   | Checks GitHub for a newer release, installs it, then restarts the running daemon through its control socket.                                                                                                                  |
+| `--version`     | Prints the running bundle's version.                                                                                                                                                                                          |
+| `--help`        | Lists the commands.                                                                                                                                                                                                           |
 
 ### `status`
 
@@ -139,6 +139,25 @@ node piploy.cjs register \
 `--port-mapping`, `--volume`, and `--env` may each be repeated. For scripting,
 `--json '<application-json>'` passes the whole application instead; it cannot be
 combined with the individual flags.
+
+`--build-context-path` optionally selects the repository-relative directory to
+send to Docker as the build context. It accepts `.` for the repository root and
+defaults to the parent directory of `DockerfilePath`, preserving existing
+registrations. When it is set, Piploy rejects paths that escape the checkout,
+contexts or Dockerfiles reached through escaping symlinks, and Dockerfiles
+outside the selected context. Docker receives only that context, so `COPY` and
+`ADD` cannot use files outside it.
+
+For example, a nested Dockerfile can deliberately build with the repository
+root as its context:
+
+```bash
+node piploy.cjs register \
+  --name api \
+  --git-repository-url https://github.com/me/monorepo.git \
+  --dockerfile-path services/api/Dockerfile \
+  --build-context-path .
+```
 
 An `EnvironmentVariables` value is normally literal. The one exception is an
 entire value in the form `${hostEnv:NAME}`, where `NAME` starts with a letter or

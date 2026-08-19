@@ -219,19 +219,21 @@ describe("parseSettings", () => {
     });
   });
 
-  it("preserves an exact host-environment reference in parsed settings", () => {
+  it("preserves a valid BuildContextPath", () => {
     const settings = parseSettings({
       Piploy: {
         RootDirectory: "/root",
         Applications: [
           {
             ...validApplication,
+            BuildContextPath: "services/api",
             EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
           },
         ],
       },
     });
 
+    expect(settings.Applications[0]?.BuildContextPath).toBe("services/api");
     expect(settings.Applications[0]?.EnvironmentVariables).toEqual({
       TOKEN: "${hostEnv:CONTAINER_TOKEN}",
     });
@@ -256,6 +258,20 @@ describe("parseSettings", () => {
     };
     expect(persisted.Piploy.Applications).toEqual([rawApplication]);
   });
+
+  it.each(["", "/outside", "../outside", "services/../../outside"])(
+    "rejects an invalid BuildContextPath during configuration validation: %s",
+    (BuildContextPath) => {
+      expect(() =>
+        parseSettings({
+          Piploy: {
+            RootDirectory: "/root",
+            Applications: [{ ...validApplication, BuildContextPath }],
+          },
+        }),
+      ).toThrow("Invalid BuildContextPath");
+    },
+  );
 });
 
 describe("resolveConfigPath", () => {

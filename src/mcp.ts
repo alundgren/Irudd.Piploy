@@ -49,6 +49,7 @@ const registerInputSchema = {
   Name: z.string(),
   GitRepositoryUrl: z.string(),
   DockerfilePath: z.string(),
+  BuildContextPath: z.string().optional(),
   PortMappings: z.array(z.string()).optional(),
   Volumes: z.array(z.string()).optional(),
   EnvironmentVariables: z.record(z.string(), z.string()).optional(),

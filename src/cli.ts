@@ -44,6 +44,10 @@ function addRegisterOptions(command: Command): Command {
     .option("--git-repository-url <url>", "git repository to deploy from")
     .option("--dockerfile-path <path>", "Dockerfile path within the repository")
     .option(
+      "--build-context-path <path>",
+      "Docker build context directory within the repository",
+    )
+    .option(
       "--port-mapping <hostPort:containerPort>",
       "port mapping, repeatable",
       collect,
