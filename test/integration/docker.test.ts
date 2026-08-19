@@ -39,9 +39,15 @@ const crashingApplication = {
   GitRepositoryUrl: "https://example.invalid/integration.git",
   DockerfilePath: "Dockerfile",
 };
+const contextApplication = {
+  Name: `${applicationName}context`,
+  GitRepositoryUrl: "https://example.invalid/integration.git",
+  DockerfilePath: "context/Dockerfile",
+  BuildContextPath: "context",
+};
 const settings: PiploySettings = {
   RootDirectory: path.join(temporaryDirectory, "root"),
-  Applications: [application, crashingApplication],
+  Applications: [application, crashingApplication, contextApplication],
   IsTestRun: true,
 };
 const docker = createDockerService(settings, logger);
@@ -152,6 +158,47 @@ describe("docker adapter", () => {
 
     const logs = await docker.getContainerLogs(crashingApplication, 10);
     expect(logs?.text).toContain("crashing-on-boot");
+
+    await docker.cleanupTestCreated();
+  });
+
+  it("builds only from the selected context", async () => {
+    const repoDirectory = path.join(
+      settings.RootDirectory,
+      contextApplication.Name,
+      "repo",
+    );
+    const contextDirectory = path.join(repoDirectory, "context");
+    await mkdir(contextDirectory, { recursive: true });
+    await writeFile(path.join(contextDirectory, "inside.txt"), "inside\n");
+    await writeFile(path.join(repoDirectory, "outside.txt"), "outside\n");
+    const base =
+      "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc";
+
+    await writeFile(
+      path.join(contextDirectory, "Dockerfile"),
+      `FROM ${base}\nCOPY inside.txt /inside.txt\n`,
+    );
+    await expect(
+      docker.ensureImageExists(contextApplication, {
+        hash: crypto.randomUUID().replaceAll("-", ""),
+      }),
+    ).resolves.toMatchObject({ wasCreated: true });
+
+    for (const instruction of [
+      "COPY ../outside.txt /outside.txt",
+      "ADD ../outside.txt /outside.txt",
+    ]) {
+      await writeFile(
+        path.join(contextDirectory, "Dockerfile"),
+        `FROM ${base}\n${instruction}\n`,
+      );
+      await expect(
+        docker.ensureImageExists(contextApplication, {
+          hash: crypto.randomUUID().replaceAll("-", ""),
+        }),
+      ).rejects.toThrow();
+    }
 
     await docker.cleanupTestCreated();
   });

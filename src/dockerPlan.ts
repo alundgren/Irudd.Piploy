@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 export interface DockerImage {
   id: string;
@@ -40,6 +41,9 @@ export interface DockerfileImageReferenceViolation {
 
 const invalidDockerfilePathMessage =
   "Invalid DockerfilePath. It must point to a dockerfile relative to the repository root. Examples: 'Dockerfile' or 'SubDirectory/Dockerfile' or Dockerfile.custom'";
+
+const invalidBuildContextPathMessage =
+  "Invalid BuildContextPath. It must be a nonempty directory relative to the repository root and cannot escape it.";
 
 /**
  * Bounds the container log files so a long running application cannot fill the
@@ -133,6 +137,21 @@ export function getDockerfilePathFromSetting(
     contextDirectory: segments.slice(0, -1).join("/"),
     dockerfileName,
   };
+}
+
+/** Normalizes the explicitly supplied Docker build context without accepting escapes. */
+export function getBuildContextPathFromSetting(
+  buildContextPath: string,
+): string {
+  const normalized = buildContextPath.replaceAll("\\", "/").trim();
+  if (
+    !normalized ||
+    path.posix.isAbsolute(normalized) ||
+    normalized.split("/").some((segment) => segment === "..")
+  ) {
+    throw new Error(invalidBuildContextPathMessage);
+  }
+  return path.posix.normalize(normalized);
 }
 
 /**

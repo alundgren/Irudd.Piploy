@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 
 import Dockerode from "dockerode";
@@ -7,6 +14,7 @@ import { decodeContainerLog, limitLogBytes } from "./containerLogs.js";
 import {
   containerLogConfig,
   containerRestartPolicy,
+  getBuildContextPathFromSetting,
   getContainerConfigHash,
   getDockerfilePathFromSetting,
   planContainer,
@@ -189,6 +197,128 @@ function buildImage(
   );
 }
 
+interface DockerBuildPaths {
+  contextDirectory: string;
+  dockerfilePath: string;
+  absoluteDockerfilePath: string;
+}
+
+function isContainedBy(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
+}
+
+function assertContainedBy(
+  parent: string,
+  child: string,
+  description: string,
+): void {
+  if (!isContainedBy(parent, child)) {
+    throw new Error(
+      `${description} must remain inside the repository build context.`,
+    );
+  }
+}
+
+/**
+ * Resolves the files Docker receives. The optional setting enables the strict
+ * containment checks; omitting it deliberately retains the legacy behavior.
+ */
+export function resolveDockerBuildPaths(
+  repoDirectory: string,
+  application: Application,
+): DockerBuildPaths {
+  const dockerfilePath = getDockerfilePathFromSetting(
+    application.DockerfilePath,
+  );
+  if (application.BuildContextPath === undefined) {
+    const contextDirectory = path.join(
+      repoDirectory,
+      dockerfilePath.contextDirectory,
+    );
+    const absoluteDockerfilePath = path.join(
+      contextDirectory,
+      dockerfilePath.dockerfileName,
+    );
+    if (!existsSync(absoluteDockerfilePath)) {
+      throw new Error(
+        `Dockerfile '${application.DockerfilePath}' does not exist. Expected location: '${absoluteDockerfilePath}'`,
+      );
+    }
+    return {
+      contextDirectory,
+      dockerfilePath: dockerfilePath.dockerfileName,
+      absoluteDockerfilePath,
+    };
+  }
+
+  const buildContextPath = getBuildContextPathFromSetting(
+    application.BuildContextPath,
+  );
+  const absoluteRepoDirectory = path.resolve(repoDirectory);
+  const contextDirectory = path.resolve(
+    absoluteRepoDirectory,
+    buildContextPath,
+  );
+  const absoluteDockerfilePath = path.resolve(
+    absoluteRepoDirectory,
+    dockerfilePath.contextDirectory,
+    dockerfilePath.dockerfileName,
+  );
+  assertContainedBy(
+    absoluteRepoDirectory,
+    contextDirectory,
+    "BuildContextPath",
+  );
+  assertContainedBy(
+    absoluteRepoDirectory,
+    absoluteDockerfilePath,
+    "DockerfilePath",
+  );
+  assertContainedBy(contextDirectory, absoluteDockerfilePath, "DockerfilePath");
+
+  if (
+    !existsSync(contextDirectory) ||
+    !statSync(contextDirectory).isDirectory()
+  ) {
+    throw new Error(
+      `BuildContextPath '${application.BuildContextPath}' does not exist or is not a directory.`,
+    );
+  }
+  if (!existsSync(absoluteDockerfilePath)) {
+    throw new Error(
+      `Dockerfile '${application.DockerfilePath}' does not exist. Expected location: '${absoluteDockerfilePath}'`,
+    );
+  }
+
+  const resolvedRepoDirectory = realpathSync(absoluteRepoDirectory);
+  const resolvedContextDirectory = realpathSync(contextDirectory);
+  const resolvedDockerfilePath = realpathSync(absoluteDockerfilePath);
+  assertContainedBy(
+    resolvedRepoDirectory,
+    resolvedContextDirectory,
+    "BuildContextPath",
+  );
+  assertContainedBy(
+    resolvedContextDirectory,
+    resolvedDockerfilePath,
+    "DockerfilePath",
+  );
+
+  return {
+    contextDirectory: resolvedContextDirectory,
+    dockerfilePath: path
+      .relative(resolvedContextDirectory, resolvedDockerfilePath)
+      .replaceAll("\\", "/"),
+    absoluteDockerfilePath: resolvedDockerfilePath,
+  };
+}
+
 export function createDockerService(
   settings: PiploySettings,
   logger: Logger,
@@ -224,25 +354,10 @@ export function createDockerService(
       return { wasCreated: false, imageId: imagePlan.imageId };
     }
 
-    const dockerfilePath = getDockerfilePathFromSetting(
-      application.DockerfilePath,
-    );
     const repoDirectory = getApplicationRepoDirectory(settings, application);
-    const contextDirectory = path.join(
-      repoDirectory,
-      dockerfilePath.contextDirectory,
-    );
-    const absoluteDockerfilePath = path.join(
-      contextDirectory,
-      dockerfilePath.dockerfileName,
-    );
-    if (!existsSync(absoluteDockerfilePath)) {
-      throw new Error(
-        `Dockerfile '${application.DockerfilePath}' does not exist. Expected location: '${absoluteDockerfilePath}'`,
-      );
-    }
+    const buildPaths = resolveDockerBuildPaths(repoDirectory, application);
     const violations = validateDockerfileImageReferences(
-      readFileSync(absoluteDockerfilePath, "utf8"),
+      readFileSync(buildPaths.absoluteDockerfilePath, "utf8"),
     );
     if (violations.length > 0) {
       throw new Error(
@@ -256,9 +371,12 @@ export function createDockerService(
     logger.info(`Building docker image for commit ${commit.hash}`);
     const buildStream = await buildImage(
       docker,
-      { context: contextDirectory, src: readdirSync(contextDirectory) },
       {
-        dockerfile: dockerfilePath.dockerfileName,
+        context: buildPaths.contextDirectory,
+        src: readdirSync(buildPaths.contextDirectory),
+      },
+      {
+        dockerfile: buildPaths.dockerfilePath,
         t: [
           getImageVersionTagLatest(application.Name),
           commitTag,

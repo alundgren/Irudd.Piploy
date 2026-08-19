@@ -478,6 +478,7 @@ describe("parseRegisterOptions", () => {
       name: "app",
       gitRepositoryUrl: "https://example.com/app.git",
       dockerfilePath: "Dockerfile",
+      buildContextPath: "services/app",
       portMapping: ["8080:80", "8443:443"],
       volume: ["data:/var/lib/app"],
       env: ["A=1", "B=x=y"],
@@ -487,6 +488,7 @@ describe("parseRegisterOptions", () => {
       ok: true,
       application: {
         ...application,
+        BuildContextPath: "services/app",
         PortMappings: ["8080:80", "8443:443"],
         Volumes: ["data:/var/lib/app"],
         EnvironmentVariables: { A: "1", B: "x=y" },
@@ -499,22 +501,34 @@ describe("parseRegisterOptions", () => {
       name: "app",
       gitRepositoryUrl: "https://example.com/app.git",
       dockerfilePath: "Dockerfile",
+      buildContextPath: "services/app",
       portMapping: [],
       volume: [],
       env: [],
     });
 
-    expect(parsed).toEqual({ ok: true, application });
+    expect(parsed).toEqual({
+      ok: true,
+      application: { ...application, BuildContextPath: "services/app" },
+    });
   });
 
   it("accepts a whole application as JSON", () => {
     const parsed = parseRegisterOptions({
-      json: JSON.stringify({ ...application, PortMappings: ["8080:80"] }),
+      json: JSON.stringify({
+        ...application,
+        BuildContextPath: "services/app",
+        PortMappings: ["8080:80"],
+      }),
     });
 
     expect(parsed).toEqual({
       ok: true,
-      application: { ...application, PortMappings: ["8080:80"] },
+      application: {
+        ...application,
+        BuildContextPath: "services/app",
+        PortMappings: ["8080:80"],
+      },
     });
   });
 
@@ -577,4 +591,21 @@ describe("parseRegisterOptions", () => {
       "Invalid port mappings",
     );
   });
+
+  it.each(["", "/outside", "../outside"])(
+    "rejects an invalid build context path from flags before contacting the daemon: %s",
+    (buildContextPath) => {
+      const parsed = parseRegisterOptions({
+        name: "app",
+        gitRepositoryUrl: "https://example.com/app.git",
+        dockerfilePath: "Dockerfile",
+        buildContextPath,
+      });
+
+      expect(parsed.ok).toBe(false);
+      expect(parsed.ok ? "" : parsed.message).toContain(
+        "Invalid BuildContextPath",
+      );
+    },
+  );
 });

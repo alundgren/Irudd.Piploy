@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
+import { getBuildContextPathFromSetting } from "./dockerPlan.js";
 import { isDuplicateApplicationName } from "./registerPolicy.js";
 
 const portMappingPattern = /^(\d+):(\d+)$/;
@@ -46,11 +47,23 @@ const VolumeSchema = z.string().transform((value, ctx) => {
   return { name: match[1]!, containerPath: match[2]! };
 });
 
+const BuildContextPathSchema = z.string().superRefine((value, ctx) => {
+  try {
+    getBuildContextPathFromSetting(value);
+  } catch (error) {
+    ctx.addIssue({
+      code: "custom",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 export const ApplicationSchema = z
   .object({
     Name: z.string().regex(/^[A-Za-z0-9_-]+$/),
     GitRepositoryUrl: z.string(),
     DockerfilePath: z.string(),
+    BuildContextPath: BuildContextPathSchema.optional(),
     PortMappings: z.array(PortMappingSchema).optional(),
     Volumes: z.array(VolumeSchema).optional(),
     EnvironmentVariables: z.record(z.string(), z.string()).optional(),

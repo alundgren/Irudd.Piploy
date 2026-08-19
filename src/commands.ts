@@ -241,6 +241,7 @@ export interface RegisterOptions {
   name?: string;
   gitRepositoryUrl?: string;
   dockerfilePath?: string;
+  buildContextPath?: string;
   portMapping?: string[];
   volume?: string[];
   env?: string[];
@@ -283,6 +284,9 @@ function buildApplicationFromFlags(
     GitRepositoryUrl: options.gitRepositoryUrl,
     DockerfilePath: options.dockerfilePath,
   };
+  if (options.buildContextPath !== undefined) {
+    application.BuildContextPath = options.buildContextPath;
+  }
   if (options.portMapping?.length) {
     application.PortMappings = options.portMapping;
   }
@@ -303,6 +307,7 @@ export function parseRegisterOptions(
     options.name !== undefined ||
     options.gitRepositoryUrl !== undefined ||
     options.dockerfilePath !== undefined ||
+    options.buildContextPath !== undefined ||
     (options.portMapping?.length ?? 0) > 0 ||
     (options.volume?.length ?? 0) > 0 ||
     (options.env?.length ?? 0) > 0;

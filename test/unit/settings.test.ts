@@ -217,6 +217,33 @@ describe("parseSettings", () => {
       DATABASE_PATH: "/app/data/app.db",
     });
   });
+
+  it("preserves a valid BuildContextPath", () => {
+    const settings = parseSettings({
+      Piploy: {
+        RootDirectory: "/root",
+        Applications: [
+          { ...validApplication, BuildContextPath: "services/api" },
+        ],
+      },
+    });
+
+    expect(settings.Applications[0]?.BuildContextPath).toBe("services/api");
+  });
+
+  it.each(["", "/outside", "../outside", "services/../../outside"])(
+    "rejects an invalid BuildContextPath during configuration validation: %s",
+    (BuildContextPath) => {
+      expect(() =>
+        parseSettings({
+          Piploy: {
+            RootDirectory: "/root",
+            Applications: [{ ...validApplication, BuildContextPath }],
+          },
+        }),
+      ).toThrow("Invalid BuildContextPath");
+    },
+  );
 });
 
 describe("resolveConfigPath", () => {

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getContainerConfigHash,
+  getBuildContextPathFromSetting,
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
@@ -172,6 +173,29 @@ describe("getDockerfilePathFromSetting", () => {
   it("rejects a path that points at a directory", () => {
     expect(() => getDockerfilePathFromSetting("api/")).toThrow(
       "Invalid DockerfilePath",
+    );
+  });
+});
+
+describe("getBuildContextPathFromSetting", () => {
+  it.each([
+    [".", "."],
+    [" services/api ", "services/api"],
+    ["services\\api", "services/api"],
+  ])("normalizes %s", (setting, expected) => {
+    expect(getBuildContextPathFromSetting(setting)).toBe(expected);
+  });
+
+  it.each([
+    "",
+    "   ",
+    "/tmp",
+    "../outside",
+    "app/../../outside",
+    "..\\outside",
+  ])("rejects an empty, absolute, or escaping path: %s", (setting) => {
+    expect(() => getBuildContextPathFromSetting(setting)).toThrow(
+      "Invalid BuildContextPath",
     );
   });
 });
