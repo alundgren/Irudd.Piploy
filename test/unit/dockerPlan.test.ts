@@ -7,6 +7,7 @@ import {
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
+  resolveContainerEnvironmentVariables,
   validateDockerfileImageReferences,
 } from "../../src/dockerPlan.js";
 
@@ -131,6 +132,25 @@ describe("planContainer", () => {
     );
   });
 
+  it("hashes a host-environment reference declaratively", () => {
+    const reference = "${hostEnv:CONTAINER_TOKEN}";
+    const hash = getContainerConfigHash({
+      environmentVariables: [`TOKEN=${reference}`],
+    });
+
+    expect(hash).toBe(
+      getContainerConfigHash({
+        environmentVariables: [`TOKEN=${reference}`],
+      }),
+    );
+    expect(hash).not.toBe(
+      getContainerConfigHash({
+        environmentVariables: ["TOKEN=test-secret"],
+      }),
+    );
+    expect(hash).not.toContain("test-secret");
+  });
+
   it("changes the hash of containers created before the restart policy", () => {
     const previousHash = createHash("sha256")
       .update(
@@ -147,6 +167,39 @@ describe("planContainer", () => {
       .digest("hex");
 
     expect(getContainerConfigHash({})).not.toBe(previousHash);
+  });
+});
+
+describe("resolveContainerEnvironmentVariables", () => {
+  it("resolves an exact host-environment reference", () => {
+    expect(
+      resolveContainerEnvironmentVariables(
+        { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
+        { CONTAINER_TOKEN: "test-secret" },
+      ),
+    ).toEqual(["TOKEN=test-secret"]);
+  });
+
+  it.each([
+    "${hostEnv:}",
+    "${hostEnv:1TOKEN}",
+    "${hostEnv:TOKEN-NAME}",
+    "before-${hostEnv:TOKEN}",
+    "${hostEnv:TOKEN}-after",
+    "${hostEnv:TOKEN",
+  ])("keeps an invalid or embedded reference literal: %s", (value) => {
+    expect(resolveContainerEnvironmentVariables({ TOKEN: value }, {})).toEqual([
+      `TOKEN=${value}`,
+    ]);
+  });
+
+  it("names an unset host variable without exposing a value", () => {
+    expect(() =>
+      resolveContainerEnvironmentVariables(
+        { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
+        {},
+      ),
+    ).toThrow("Host environment variable 'CONTAINER_TOKEN' is not set");
   });
 });
 

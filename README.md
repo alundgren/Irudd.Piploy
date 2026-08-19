@@ -140,6 +140,15 @@ node piploy.cjs register \
 `--json '<application-json>'` passes the whole application instead; it cannot be
 combined with the individual flags.
 
+An `EnvironmentVariables` value is normally literal. The one exception is an
+entire value in the form `${hostEnv:NAME}`, where `NAME` starts with a letter or
+underscore and then contains only letters, digits, or underscores. Piploy stores
+that reference unchanged and resolves it from the daemon's environment only
+when it creates or recreates a container; it does not include the resolved value
+in its ordinary diagnostics. Restart the daemon after changing its environment,
+then make a configuration or commit change that recreates the container for the
+new value to apply. Other interpolation-like values remain literal.
+
 ## MCP server
 
 While the daemon runs, it also serves an MCP endpoint over Streamable HTTP at:
