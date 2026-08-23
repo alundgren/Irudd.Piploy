@@ -5,6 +5,7 @@ import {
   type OrchestratorDeps,
 } from "../../src/orchestrator.js";
 import { PortAlreadyInUseError } from "../../src/docker.js";
+import { GitOperationError } from "../../src/git.js";
 import type { Logger } from "../../src/logger.js";
 import type { Application, PiploySettings } from "../../src/settings.js";
 
@@ -140,6 +141,53 @@ describe("orchestrator", () => {
         stage: "fetch",
         message: "clone failed",
       },
+    ]);
+  });
+
+  it("keeps a normalized Git failure safe in the poll result and logs", async () => {
+    const deps = createDeps();
+    const errors: string[] = [];
+    const logger = createLogger();
+    logger.error = (message) => errors.push(message);
+    deps.ensureLocalRepository = vi.fn(async () => {
+      throw new GitOperationError({
+        reason: "credential-environment-missing",
+        message:
+          "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
+      });
+    });
+
+    await expect(
+      createOrchestrator(settings, logger, deps).poll(),
+    ).resolves.toEqual([
+      {
+        application: "first",
+        ok: false,
+        stage: "fetch",
+        message:
+          "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
+        gitError: {
+          reason: "credential-environment-missing",
+          message:
+            "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
+        },
+      },
+      {
+        application: "second",
+        ok: false,
+        stage: "fetch",
+        message:
+          "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
+        gitError: {
+          reason: "credential-environment-missing",
+          message:
+            "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
+        },
+      },
+    ]);
+    expect(errors).toEqual([
+      "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
+      "Host environment variable 'PIPLOY_GITHUB_TOKEN' is not set. Restart Piploy after setting it.",
     ]);
   });
 

@@ -9,9 +9,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 
+import gitHttp from "isomorphic-git/http/node";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  credentialOwnerFromUrl,
   ensureLocalRepository,
   getCommitStatus,
   getLatestCommit,
@@ -24,6 +26,23 @@ import type { Application, PiploySettings } from "../../src/settings.js";
 import { startGitFixtureRemote } from "./helpers/gitFixture.js";
 import type { GitFixtureRemote } from "./helpers/gitFixture.js";
 import { createSilentLogger } from "./helpers/testLogger.js";
+
+const githubOwner = "alundgren";
+const tokenEnvironmentName = "PIPLOY_GITHUB_TOKEN";
+const sentinelToken = "sentinel-github-token";
+
+function githubFixtureHttp(remote: GitFixtureRemote) {
+  return {
+    request(request: Parameters<typeof gitHttp.request>[0]) {
+      const source = new URL(request.url);
+      const fixturePath = source.pathname.replace(`/${githubOwner}`, "");
+      return gitHttp.request({
+        ...request,
+        url: `${remote.baseUrl}${fixturePath}${source.search}`,
+      });
+    },
+  };
+}
 
 describe("git", () => {
   const logger = createSilentLogger();
@@ -46,6 +65,26 @@ describe("git", () => {
   afterEach(async () => {
     await remote.close();
     rmSync(rootDirectory, { recursive: true, force: true });
+  });
+
+  describe("credential URL policy", () => {
+    it("accepts only an exact GitHub HTTPS owner repository URL", () => {
+      expect(
+        credentialOwnerFromUrl("https://github.com/alundgren/repository.git"),
+      ).toBe("alundgren");
+    });
+
+    it.each([
+      "http://github.com/alundgren/repository.git",
+      "https://github.com:443/alundgren/repository.git",
+      "https://github.com./alundgren/repository.git",
+      "https://github.com.evil.test/alundgren/repository.git",
+      "https://token@github.com/alundgren/repository.git",
+      "https://github.com/alundgren",
+      "https://github.com/alundgren/repository.git?token=secret",
+    ])("rejects a credential URL outside the exact scope: %s", (url) => {
+      expect(credentialOwnerFromUrl(url)).toBeUndefined();
+    });
   });
 
   describe("ensureLocalRepository", () => {
@@ -120,6 +159,186 @@ describe("git", () => {
       await expect(
         ensureLocalRepository(settings, application, logger),
       ).resolves.toBeUndefined();
+    });
+
+    it("normalizes a transport failure without retaining the adapter error", async () => {
+      application.GitRepositoryUrl = "http://127.0.0.1:1/repository.git";
+
+      await expect(
+        ensureLocalRepository(settings, application, logger),
+      ).rejects.toEqual(
+        expect.objectContaining({
+          name: "GitOperationError",
+          diagnostic: {
+            reason: "transport-or-fetch-failure",
+            message: "Git fetch failed.",
+          },
+        }),
+      );
+    });
+
+    it("authenticates clone and poll fetch through the GitHub callback without persisting a token", async () => {
+      const authenticatedRemote = await startGitFixtureRemote({
+        credentials: { username: "x-access-token", password: sentinelToken },
+      });
+      const originalToken = process.env[tokenEnvironmentName];
+      const messages: string[] = [];
+      const logging = {
+        debug: (message: string) => messages.push(message),
+        info: (message: string) => messages.push(message),
+        warn: (message: string) => messages.push(message),
+        error: (message: string) => messages.push(message),
+        child: () => logging,
+      };
+      try {
+        process.env[tokenEnvironmentName] = sentinelToken;
+        const authenticatedApplication: Application = {
+          Name: "authenticated",
+          GitRepositoryUrl: `https://github.com/${githubOwner}/repo.git`,
+          DockerfilePath: "Dockerfile",
+        };
+        const authenticatedSettings: PiploySettings = {
+          RootDirectory: rootDirectory,
+          Applications: [authenticatedApplication],
+          GitHubOwnerCredentials: {
+            [githubOwner]: `\${hostEnv:${tokenEnvironmentName}}`,
+          },
+        };
+        const http = githubFixtureHttp(authenticatedRemote);
+        const initialHash = authenticatedRemote.commit(
+          { "index.html": "v1" },
+          "initial",
+        );
+
+        await ensureLocalRepository(
+          authenticatedSettings,
+          authenticatedApplication,
+          logging,
+          http,
+        );
+        const nextHash = authenticatedRemote.commit(
+          { "index.html": "v2" },
+          "next",
+        );
+        await ensureLocalRepository(
+          authenticatedSettings,
+          authenticatedApplication,
+          logging,
+          http,
+        );
+        const status = await getCommitStatus(
+          authenticatedSettings,
+          authenticatedApplication,
+          http,
+        );
+
+        expect(initialHash).not.toBe(nextHash);
+        expect(status?.remote.hash).toBe(nextHash);
+        expect(
+          authenticatedRemote.authenticatedRequests(),
+        ).toBeGreaterThanOrEqual(3);
+        expect(
+          readFileSync(
+            path.join(
+              getApplicationRepoDirectory(
+                authenticatedSettings,
+                authenticatedApplication,
+              ),
+              ".git",
+              "config",
+            ),
+            "utf8",
+          ),
+        ).not.toContain(sentinelToken);
+        expect(JSON.stringify(authenticatedSettings)).not.toContain(
+          sentinelToken,
+        );
+        expect(JSON.stringify(status)).not.toContain(sentinelToken);
+        expect(messages.join("\n")).not.toContain(sentinelToken);
+      } finally {
+        if (originalToken === undefined)
+          delete process.env[tokenEnvironmentName];
+        else process.env[tokenEnvironmentName] = originalToken;
+        await authenticatedRemote.close();
+      }
+    });
+
+    it("normalizes missing, rejected, and ambiguous GitHub credential failures through real clone requests", async () => {
+      const authenticatedRemote = await startGitFixtureRemote({
+        credentials: { username: "x-access-token", password: sentinelToken },
+      });
+      const originalToken = process.env[tokenEnvironmentName];
+      const failedApplication: Application = {
+        Name: "failed-authentication",
+        GitRepositoryUrl: `https://github.com/${githubOwner}/repo.git`,
+        DockerfilePath: "Dockerfile",
+      };
+      const failedSettings: PiploySettings = {
+        RootDirectory: rootDirectory,
+        Applications: [failedApplication],
+        GitHubOwnerCredentials: {
+          [githubOwner]: `\${hostEnv:${tokenEnvironmentName}}`,
+        },
+      };
+      const http = githubFixtureHttp(authenticatedRemote);
+      authenticatedRemote.commit({ "index.html": "v1" }, "initial");
+      try {
+        delete process.env[tokenEnvironmentName];
+        await expect(
+          ensureLocalRepository(
+            failedSettings,
+            failedApplication,
+            logger,
+            http,
+          ),
+        ).rejects.toMatchObject({
+          diagnostic: {
+            reason: "credential-environment-missing",
+            message: `Host environment variable '${tokenEnvironmentName}' is not set. Restart Piploy after setting it.`,
+          },
+        });
+
+        process.env[tokenEnvironmentName] = "wrong-token";
+        await expect(
+          ensureLocalRepository(
+            failedSettings,
+            failedApplication,
+            logger,
+            http,
+          ),
+        ).rejects.toMatchObject({
+          diagnostic: {
+            reason: "credential-rejected",
+            message:
+              "GitHub rejected the credential configured for owner 'alundgren'.",
+          },
+        });
+
+        process.env[tokenEnvironmentName] = sentinelToken;
+        const missingApplication = {
+          ...failedApplication,
+          Name: "missing",
+          GitRepositoryUrl: `https://github.com/${githubOwner}/missing.git`,
+        };
+        await expect(
+          ensureLocalRepository(
+            { ...failedSettings, Applications: [missingApplication] },
+            missingApplication,
+            logger,
+            http,
+          ),
+        ).rejects.toMatchObject({
+          diagnostic: {
+            reason: "repository-inaccessible-or-not-found",
+            message: "Repository not found or inaccessible.",
+          },
+        });
+      } finally {
+        if (originalToken === undefined)
+          delete process.env[tokenEnvironmentName];
+        else process.env[tokenEnvironmentName] = originalToken;
+        await authenticatedRemote.close();
+      }
     });
   });
 

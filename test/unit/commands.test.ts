@@ -85,6 +85,31 @@ describe("commands", () => {
     expect(output).toHaveBeenCalledWith("  Port mappings: none");
   });
 
+  it("prints a safe Git diagnostic only when the fetch failed", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      status: {
+        applications: [
+          {
+            ...daemonStatus.applications[0]!,
+            gitError: {
+              reason: "repository-inaccessible-or-not-found" as const,
+              message: "Repository not found or inaccessible.",
+            },
+          },
+        ],
+      },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(output).toHaveBeenCalledWith(
+      "  Git error: Repository not found or inaccessible.",
+    );
+  });
+
   it("prints the container state, exit code, and restart count", async () => {
     const deps = createDeps();
     deps.requestDaemon = vi.fn(async () => ({

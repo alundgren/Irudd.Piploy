@@ -4,7 +4,12 @@ import path from "node:path";
 
 import { resolveTailLines } from "./containerLogs.js";
 import { createDockerService, type DockerStatus } from "./docker.js";
-import { getCommitStatus, type GitCommitStatus } from "./git.js";
+import {
+  getCommitStatus,
+  GitOperationError,
+  type GitCommitStatus,
+  type GitDiagnostic,
+} from "./git.js";
 import type { Logger } from "./logger.js";
 import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
 import { getTailscaleAddress } from "./mcpTailscale.js";
@@ -72,12 +77,48 @@ export interface ApplicationDaemonStatus {
   /** Configured host-to-container mappings; empty means this Application exposes none. */
   portMappings: PortMapping[];
   git: GitCommitStatus | null;
+  /** Present only when Piploy could not safely fetch a cloned repository. */
+  gitError?: GitDiagnostic;
   docker: DockerStatus;
   isRunningLatestVersion: boolean;
 }
 
 export interface DaemonStatus {
   applications: ApplicationDaemonStatus[];
+}
+
+/** Combines one application's Git and Docker state without losing Docker on a safe Git failure. */
+export async function getApplicationStatus(
+  application: Application,
+  gitStatus: Promise<GitCommitStatus | null>,
+  dockerStatus: Promise<DockerStatus>,
+): Promise<ApplicationDaemonStatus> {
+  try {
+    const [git, resolvedDockerStatus] = await Promise.all([
+      gitStatus,
+      dockerStatus,
+    ]);
+    return {
+      application: application.Name,
+      // `PortMappings` is optional in configuration, but status is an agent
+      // API: make the no-mappings case unambiguous rather than omitting it.
+      portMappings: application.PortMappings ?? [],
+      git,
+      docker: resolvedDockerStatus,
+      isRunningLatestVersion: isRunningLatestVersion(git, resolvedDockerStatus),
+    };
+  } catch (error) {
+    if (!(error instanceof GitOperationError)) throw error;
+    const resolvedDockerStatus = await dockerStatus;
+    return {
+      application: application.Name,
+      portMappings: application.PortMappings ?? [],
+      git: null,
+      gitError: error.diagnostic,
+      docker: resolvedDockerStatus,
+      isRunningLatestVersion: false,
+    };
+  }
 }
 
 export interface DaemonDeps {
@@ -151,24 +192,6 @@ export function createDaemonDeps(
   const docker = createDockerService(settings, logger);
   const orchestrator = createOrchestrator(settings, logger);
 
-  async function getApplicationStatus(
-    application: Application,
-  ): Promise<ApplicationDaemonStatus> {
-    const [git, dockerStatus] = await Promise.all([
-      getCommitStatus(settings, application),
-      docker.getDockerStatus(application),
-    ]);
-    return {
-      application: application.Name,
-      // `PortMappings` is optional in configuration, but status is an agent
-      // API: make the no-mappings case unambiguous rather than omitting it.
-      portMappings: application.PortMappings ?? [],
-      git,
-      docker: dockerStatus,
-      isRunningLatestVersion: isRunningLatestVersion(git, dockerStatus),
-    };
-  }
-
   async function getLogs(
     name: string,
     tail?: number,
@@ -197,7 +220,13 @@ export function createDaemonDeps(
     poll: () => orchestrator.poll(),
     getStatus: async () => ({
       applications: await Promise.all(
-        settings.Applications.map(getApplicationStatus),
+        settings.Applications.map((application) =>
+          getApplicationStatus(
+            application,
+            getCommitStatus(settings, application),
+            docker.getDockerStatus(application),
+          ),
+        ),
       ),
     }),
     getLogs,

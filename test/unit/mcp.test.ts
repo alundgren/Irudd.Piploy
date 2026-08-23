@@ -76,6 +76,9 @@ describe("mcp server", () => {
     expect(tools.find((tool) => tool.name === "status")?.description).toContain(
       "host-to-container port mappings",
     );
+    expect(tools.find((tool) => tool.name === "status")?.description).toContain(
+      "gitError",
+    );
   });
 
   it("warns that logs are returned unredacted", async () => {

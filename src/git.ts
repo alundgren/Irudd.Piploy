@@ -7,6 +7,7 @@ import http from "isomorphic-git/http/node";
 import type { Logger } from "./logger.js";
 import {
   getApplicationRepoDirectory,
+  parseHostEnvironmentReference,
   type Application,
   type PiploySettings,
 } from "./settings.js";
@@ -21,6 +22,192 @@ export interface GitCommitStatus {
   local: GitCommit;
   remote: GitCommit;
 }
+
+export type GitFailureReason =
+  | "credential-not-configured"
+  | "credential-environment-missing"
+  | "credential-rejected"
+  | "repository-inaccessible-or-not-found"
+  | "transport-or-fetch-failure";
+
+export interface GitDiagnostic {
+  reason: GitFailureReason;
+  message: string;
+}
+
+export class GitOperationError extends Error {
+  constructor(readonly diagnostic: GitDiagnostic) {
+    super(diagnostic.message);
+    this.name = "GitOperationError";
+  }
+}
+
+class AuthenticationStoppedError extends Error {
+  constructor(readonly diagnostic: GitDiagnostic) {
+    super(diagnostic.message);
+    this.name = "AuthenticationStoppedError";
+  }
+}
+
+function diagnosticFor(
+  reason: GitFailureReason,
+  details: { environmentName?: string; owner?: string } = {},
+): GitDiagnostic {
+  switch (reason) {
+    case "credential-not-configured":
+      return {
+        reason,
+        message:
+          details.owner === undefined
+            ? "No credential is configured for this GitHub owner."
+            : `No credential is configured for GitHub owner '${details.owner}'.`,
+      };
+    case "credential-environment-missing":
+      return {
+        reason,
+        message: `Host environment variable '${details.environmentName}' is not set. Restart Piploy after setting it.`,
+      };
+    case "credential-rejected":
+      return {
+        reason,
+        message:
+          details.owner === undefined
+            ? "GitHub rejected the configured credential."
+            : `GitHub rejected the credential configured for owner '${details.owner}'.`,
+      };
+    case "repository-inaccessible-or-not-found":
+      return { reason, message: "Repository not found or inaccessible." };
+    case "transport-or-fetch-failure":
+      return { reason, message: "Git fetch failed." };
+  }
+}
+
+/** Returns the GitHub owner only for the HTTPS URL shape eligible for credentials. */
+export function credentialOwnerFromUrl(url: string): string | undefined {
+  // WHATWG URL drops an explicit default port, so the raw input must also be
+  // checked to keep this scope to exactly https://github.com.
+  if (!url.startsWith("https://github.com/")) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.host !== "github.com" ||
+    parsed.username !== "" ||
+    parsed.password !== ""
+  ) {
+    return undefined;
+  }
+  if (parsed.search !== "" || parsed.hash !== "") return undefined;
+  const match = /^\/([^/]+)\/([^/]+)(?:\/.*)?$/.exec(parsed.pathname);
+  return match?.[1];
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as {
+    statusCode?: unknown;
+    data?: { statusCode?: unknown };
+  };
+  return typeof candidate.statusCode === "number"
+    ? candidate.statusCode
+    : typeof candidate.data?.statusCode === "number"
+      ? candidate.data.statusCode
+      : undefined;
+}
+
+type RemoteAuthOptions = Pick<
+  Parameters<typeof git.clone>[0],
+  "onAuth" | "onAuthFailure"
+>;
+
+/** Creates callbacks and safe error handling for one HTTPS remote operation. */
+function createGitRemoteAuthentication(settings: PiploySettings): {
+  callbacks: RemoteAuthOptions;
+  errorFor(error: unknown): GitOperationError;
+} {
+  let stopped: AuthenticationStoppedError | undefined;
+  let suppliedCredential = false;
+  let credentialOwner: string | undefined;
+
+  const stop = (
+    reason: GitFailureReason,
+    details: { environmentName?: string; owner?: string } = {},
+  ) => {
+    stopped = new AuthenticationStoppedError(diagnosticFor(reason, details));
+    return { cancel: true };
+  };
+
+  return {
+    callbacks: {
+      onAuth: (url) => {
+        const owner = credentialOwnerFromUrl(url);
+        const credentials = settings.GitHubOwnerCredentials;
+        const reference =
+          owner !== undefined &&
+          credentials !== undefined &&
+          Object.hasOwn(credentials, owner)
+            ? credentials[owner]
+            : undefined;
+        if (reference === undefined) {
+          return stop("credential-not-configured", { owner });
+        }
+
+        const environmentName = parseHostEnvironmentReference(reference);
+        if (environmentName === undefined) {
+          return stop("credential-not-configured", { owner });
+        }
+        const token = process.env[environmentName];
+        if (token === undefined) {
+          return stop("credential-environment-missing", { environmentName });
+        }
+        suppliedCredential = true;
+        credentialOwner = owner;
+        return { username: "x-access-token", password: token };
+      },
+      onAuthFailure: () => {
+        if (suppliedCredential) {
+          return stop("credential-rejected", { owner: credentialOwner });
+        }
+        return stop("credential-not-configured");
+      },
+    },
+    errorFor(error) {
+      const status = httpStatus(error);
+      if (status === 404) {
+        return new GitOperationError(
+          diagnosticFor("repository-inaccessible-or-not-found"),
+        );
+      }
+      if (stopped !== undefined)
+        return new GitOperationError(stopped.diagnostic);
+      if ((status === 401 || status === 403) && suppliedCredential) {
+        return new GitOperationError(
+          diagnosticFor("credential-rejected", { owner: credentialOwner }),
+        );
+      }
+      return new GitOperationError(diagnosticFor("transport-or-fetch-failure"));
+    },
+  };
+}
+
+/** Runs one HTTPS remote operation without retaining a resolved credential. */
+async function runRemoteOperation<T>(
+  settings: PiploySettings,
+  invoke: (authentication: RemoteAuthOptions) => Promise<T>,
+): Promise<T> {
+  const authentication = createGitRemoteAuthentication(settings);
+  try {
+    return await invoke(authentication.callbacks);
+  } catch (error) {
+    throw authentication.errorFor(error);
+  }
+}
+
+type GitHttp = Parameters<typeof git.clone>[0]["http"];
 
 function hasGitDirectory(repoDirectory: string): boolean {
   return fs.existsSync(path.join(repoDirectory, ".git"));
@@ -74,23 +261,37 @@ async function resetHard(
   await git.checkout({ fs, dir: repoDirectory, ref: branch, force: true });
 }
 
+async function fetchOrigin(
+  settings: PiploySettings,
+  repoDirectory: string,
+  gitHttp: GitHttp,
+): Promise<void> {
+  await runRemoteOperation(settings, (authentication) =>
+    git.fetch({
+      fs,
+      http: gitHttp,
+      dir: repoDirectory,
+      remote: "origin",
+      ...authentication,
+    }),
+  );
+}
+
 /** Clones `application`'s git repository if absent, otherwise fetches and hard-resets to the remote tip. */
 export async function ensureLocalRepository(
   settings: PiploySettings,
   application: Application,
   logger: Logger,
+  gitHttp: GitHttp = http,
 ): Promise<void> {
-  const log = logger.child({
-    operation: "ensureLocalRepository",
-    gitRepository: application.GitRepositoryUrl,
-  });
+  const log = logger.child({ operation: "ensureLocalRepository" });
   const repoDirectory = getApplicationRepoDirectory(settings, application);
   fs.mkdirSync(repoDirectory, { recursive: true });
 
   if (hasGitDirectory(repoDirectory)) {
     log.info("Local exists. Fetching origin");
     const branch = await resolveBranch(repoDirectory);
-    await git.fetch({ fs, http, dir: repoDirectory, remote: "origin" });
+    await fetchOrigin(settings, repoDirectory, gitHttp);
 
     const localOid = await git.resolveRef({
       fs,
@@ -113,12 +314,15 @@ export async function ensureLocalRepository(
     }
   } else {
     log.info("Cloning into remote");
-    await git.clone({
-      fs,
-      http,
-      dir: repoDirectory,
-      url: application.GitRepositoryUrl,
-    });
+    await runRemoteOperation(settings, (authentication) =>
+      git.clone({
+        fs,
+        http: gitHttp,
+        dir: repoDirectory,
+        url: application.GitRepositoryUrl,
+        ...authentication,
+      }),
+    );
   }
 }
 
@@ -139,6 +343,7 @@ export async function getLatestCommit(
 export async function getCommitStatus(
   settings: PiploySettings,
   application: Application,
+  gitHttp: GitHttp = http,
 ): Promise<GitCommitStatus | null> {
   const repoDirectory = getApplicationRepoDirectory(settings, application);
   if (!hasGitDirectory(repoDirectory)) {
@@ -146,7 +351,7 @@ export async function getCommitStatus(
   }
 
   const branch = await resolveBranch(repoDirectory);
-  await git.fetch({ fs, http, dir: repoDirectory, remote: "origin" });
+  await fetchOrigin(settings, repoDirectory, gitHttp);
 
   const localOid = await git.resolveRef({
     fs,

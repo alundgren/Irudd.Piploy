@@ -12,6 +12,7 @@ import {
   getDataDirectory,
   getVolumeDirectory,
   loadSettings,
+  parseHostEnvironmentReference,
   parseSettings,
   registerApplication,
   resolveBundleDirectory,
@@ -99,6 +100,50 @@ describe("parseSettings", () => {
     expect(settings.Applications[0]?.PortMappings).toBeUndefined();
     expect(settings.Applications[0]?.Volumes).toBeUndefined();
     expect(settings.Applications[0]?.EnvironmentVariables).toBeUndefined();
+    expect(settings.GitHubOwnerCredentials).toBeUndefined();
+  });
+
+  it("accepts canonical GitHub owner credential references without resolving them", () => {
+    const settings = parseSettings({
+      Piploy: {
+        RootDirectory: "/root",
+        Applications: [validApplication],
+        GitHubOwnerCredentials: {
+          alundgren: "${hostEnv:PIPLOY_GITHUB_TOKEN}",
+        },
+      },
+    });
+
+    expect(settings.GitHubOwnerCredentials).toEqual({
+      alundgren: "${hostEnv:PIPLOY_GITHUB_TOKEN}",
+    });
+  });
+
+  it.each([
+    ["Alundgren", "${hostEnv:PIPLOY_GITHUB_TOKEN}"],
+    ["alundgren--team", "${hostEnv:PIPLOY_GITHUB_TOKEN}"],
+    ["alundgren", "token"],
+    ["alundgren", "${hostEnv:1TOKEN}"],
+  ])(
+    "rejects an invalid GitHub owner credential mapping",
+    (owner, reference) => {
+      expect(() =>
+        parseSettings({
+          Piploy: {
+            RootDirectory: "/root",
+            Applications: [validApplication],
+            GitHubOwnerCredentials: { [owner]: reference },
+          },
+        }),
+      ).toThrow();
+    },
+  );
+
+  it("recognizes only an exact host environment reference", () => {
+    expect(parseHostEnvironmentReference("${hostEnv:NAME}")).toBe("NAME");
+    expect(
+      parseHostEnvironmentReference("before-${hostEnv:NAME}"),
+    ).toBeUndefined();
   });
 
   it("rejects a config missing the Piploy wrapper key", () => {
