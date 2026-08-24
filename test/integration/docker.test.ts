@@ -54,6 +54,11 @@ const contextApplication = {
   DockerfilePath: "context/Dockerfile",
   BuildContextPath: "context",
 };
+const dockerIgnoreApplication = {
+  Name: `${applicationName}dockerignore`,
+  GitRepositoryUrl: "https://example.invalid/integration.git",
+  DockerfilePath: "Dockerfile",
+};
 const raceApplication = {
   Name: `${applicationName}race`,
   GitRepositoryUrl: "https://example.invalid/integration.git",
@@ -65,6 +70,7 @@ const settings: PiploySettings = {
     application,
     crashingApplication,
     contextApplication,
+    dockerIgnoreApplication,
     raceApplication,
   ],
   IsTestRun: true,
@@ -260,6 +266,32 @@ describe("docker adapter", () => {
         }),
       ).rejects.toThrow();
     }
+
+    await docker.cleanupTestCreated();
+  });
+
+  it("keeps re-included files in a dockerignore build context", async () => {
+    const repoDirectory = path.join(
+      settings.RootDirectory,
+      dockerIgnoreApplication.Name,
+      "repo",
+    );
+    await mkdir(path.join(repoDirectory, "src"), { recursive: true });
+    await writeFile(
+      path.join(repoDirectory, ".dockerignore"),
+      "*\n!Dockerfile\n!src/\n!src/**\n",
+    );
+    await writeFile(path.join(repoDirectory, "src", "probe.txt"), "present\n");
+    await writeFile(
+      path.join(repoDirectory, "Dockerfile"),
+      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCOPY src/probe.txt /probe.txt\nRUN test "$(cat /probe.txt)" = present\n',
+    );
+
+    await expect(
+      docker.ensureImageExists(dockerIgnoreApplication, {
+        hash: crypto.randomUUID().replaceAll("-", ""),
+      }),
+    ).resolves.toMatchObject({ wasCreated: true });
 
     await docker.cleanupTestCreated();
   });

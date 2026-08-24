@@ -47,7 +47,7 @@ export default defineConfig({
   // Piploy ships only this bundle. Keep every runtime dependency in it rather
   // than relying on a node_modules directory beside the deployed artifact.
   noExternal: [
-    /^(commander|dockerode|isomorphic-git|pino|zod)(\/.*)?$/,
+    /^(@balena\/dockerignore|commander|dockerode|isomorphic-git|pino|tar-fs|zod)(\/.*)?$/,
     // The MCP SDK reaches ajv through its JSON Schema validation, and ajv
     // requires its runtime helpers by subpath.
     /^(@modelcontextprotocol\/sdk|ajv|ajv-formats)(\/.*)?$/,
