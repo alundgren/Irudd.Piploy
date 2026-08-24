@@ -2,13 +2,15 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   statSync,
 } from "node:fs";
 import path from "node:path";
+import { createGzip } from "node:zlib";
 
+import DockerIgnore from "@balena/dockerignore";
 import Dockerode from "dockerode";
+import { pack } from "tar-fs";
 
 import { decodeContainerLog, limitLogBytes } from "./containerLogs.js";
 import {
@@ -222,7 +224,7 @@ function followBuildProgress(
 
 function buildImage(
   docker: Dockerode,
-  context: Dockerode.ImageBuildContext,
+  context: NodeJS.ReadableStream,
   options: PiployImageBuildOptions,
 ): Promise<NodeJS.ReadableStream> {
   // @types/dockerode incorrectly only permits one tag, while the daemon API
@@ -237,6 +239,45 @@ interface DockerBuildPaths {
   contextDirectory: string;
   dockerfilePath: string;
   absoluteDockerfilePath: string;
+}
+
+function createBuildContext(
+  buildPaths: DockerBuildPaths,
+): NodeJS.ReadableStream {
+  const dockerfileIgnorePath = `${buildPaths.absoluteDockerfilePath}.dockerignore`;
+  const ignorePath = existsSync(dockerfileIgnorePath)
+    ? dockerfileIgnorePath
+    : path.join(buildPaths.contextDirectory, ".dockerignore");
+  const protectedPaths = [
+    path.relative(
+      buildPaths.contextDirectory,
+      buildPaths.absoluteDockerfilePath,
+    ),
+    path.relative(buildPaths.contextDirectory, ignorePath),
+  ].map((filePath) => filePath.replaceAll(path.sep, "/"));
+  const dockerIgnore = existsSync(ignorePath)
+    ? DockerIgnore.default({ ignorecase: false }).add(
+        readFileSync(ignorePath, "utf8"),
+      )
+    : undefined;
+
+  return pack(buildPaths.contextDirectory, {
+    ignore(filePath) {
+      const relativePath = path
+        .relative(buildPaths.contextDirectory, filePath)
+        .replaceAll(path.sep, "/");
+      const mustInclude = protectedPaths.some(
+        (protectedPath) =>
+          relativePath === protectedPath ||
+          protectedPath.startsWith(`${relativePath}/`),
+      );
+      return (
+        relativePath !== "" &&
+        !mustInclude &&
+        dockerIgnore?.ignores(relativePath) === true
+      );
+    },
+  }).pipe(createGzip());
 }
 
 function isContainedBy(parent: string, child: string): boolean {
@@ -433,10 +474,7 @@ export function createDockerService(
     logger.info(`Building docker image for commit ${commit.hash}`);
     const buildStream = await buildImage(
       docker,
-      {
-        context: buildPaths.contextDirectory,
-        src: readdirSync(buildPaths.contextDirectory),
-      },
+      createBuildContext(buildPaths),
       {
         dockerfile: buildPaths.dockerfilePath,
         t: [
