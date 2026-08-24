@@ -5,10 +5,12 @@ import path from "node:path";
 import { resolveTailLines } from "./containerLogs.js";
 import { createDockerService, type DockerStatus } from "./docker.js";
 import {
+  checkGitHubRepositoryAccess,
   getCommitStatus,
   GitOperationError,
   type GitCommitStatus,
   type GitDiagnostic,
+  type GitHubRepositoryAccessResult,
 } from "./git.js";
 import type { Logger } from "./logger.js";
 import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
@@ -39,6 +41,7 @@ export type DaemonRequest =
   | { command: "poll" }
   | { command: "stop" }
   | { command: "logs"; application: string; tail?: number }
+  | { command: "check-github-repository-access"; repository: string }
   | { command: "register"; application: unknown };
 
 export type DaemonResponse =
@@ -46,6 +49,7 @@ export type DaemonResponse =
   | { ok: true; applications: PollApplicationResult[] }
   | { ok: true; application: Application }
   | { ok: true; logs: ApplicationLogs }
+  | { ok: true; repositoryAccess: GitHubRepositoryAccessResult }
   | { ok: true }
   | {
       ok: false;
@@ -125,6 +129,9 @@ export interface DaemonDeps {
   poll(): Promise<PollApplicationResult[]>;
   getStatus(): Promise<DaemonStatus>;
   getLogs(application: string, tail?: number): Promise<ApplicationLogsResult>;
+  checkGitHubRepositoryAccess(
+    repository: string,
+  ): Promise<GitHubRepositoryAccessResult>;
   attemptSelfUpdate(): Promise<SelfUpdateResult>;
 }
 
@@ -192,6 +199,10 @@ function parseRequest(value: unknown): DaemonRequest | undefined {
         : undefined;
     return { command: "logs", application: value.application, tail };
   }
+  if (command === "check-github-repository-access" && "repository" in value) {
+    if (typeof value.repository !== "string") return undefined;
+    return { command, repository: value.repository };
+  }
   return undefined;
 }
 
@@ -244,6 +255,8 @@ export function createDaemonDeps(
       ),
     }),
     getLogs,
+    checkGitHubRepositoryAccess: (repository) =>
+      checkGitHubRepositoryAccess(settings, repository),
     attemptSelfUpdate: () => attemptSelfUpdate(logger),
   };
 }
@@ -429,6 +442,13 @@ export async function startDaemon(
             ? { ok: true, logs: result.logs }
             : { ok: false, reason: result.reason };
         }
+        case "check-github-repository-access":
+          return {
+            ok: true,
+            repositoryAccess: await deps.checkGitHubRepositoryAccess(
+              request.repository,
+            ),
+          };
         case "stop":
           return { ok: true };
         case "register":

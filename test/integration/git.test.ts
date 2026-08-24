@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -10,9 +11,10 @@ import os from "node:os";
 import path from "node:path";
 
 import gitHttp from "isomorphic-git/http/node";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkGitHubRepositoryAccess,
   credentialOwnerFromUrl,
   ensureLocalRepository,
   getCommitStatus,
@@ -31,14 +33,24 @@ const githubOwner = "alundgren";
 const tokenEnvironmentName = "PIPLOY_GITHUB_TOKEN";
 const sentinelToken = "sentinel-github-token";
 
-function githubFixtureHttp(remote: GitFixtureRemote) {
+function githubFixtureHttp(
+  remote: GitFixtureRemote,
+  onRequestBody: (body: string) => void = () => {},
+) {
   return {
-    request(request: Parameters<typeof gitHttp.request>[0]) {
+    async request(request: Parameters<typeof gitHttp.request>[0]) {
       const source = new URL(request.url);
       const fixturePath = source.pathname.replace(`/${githubOwner}`, "");
+      const chunks: Uint8Array[] = [];
+      if (request.body !== undefined) {
+        for await (const chunk of request.body) chunks.push(chunk);
+      }
+      const body = Buffer.concat(chunks);
+      onRequestBody(body.toString("utf8"));
       return gitHttp.request({
         ...request,
         url: `${remote.baseUrl}${fixturePath}${source.search}`,
+        body: request.body === undefined ? undefined : (chunks as never),
       });
     },
   };
@@ -338,6 +350,234 @@ describe("git", () => {
           delete process.env[tokenEnvironmentName];
         else process.env[tokenEnvironmentName] = originalToken;
         await authenticatedRemote.close();
+      }
+    });
+  });
+
+  describe("checkGitHubRepositoryAccess", () => {
+    it.each([
+      "",
+      ".",
+      "..",
+      "repository/name",
+      "repository\\name",
+      "https://github.com/alundgren/repository.git",
+      "repository?query",
+      "repository#fragment",
+      "a".repeat(101),
+    ])(
+      "rejects an unsafe repository input before making a request: %s",
+      async (repository) => {
+        let requested = false;
+
+        await expect(
+          checkGitHubRepositoryAccess(settings, repository, {
+            http: {
+              request: async () => {
+                requested = true;
+                throw new Error("network request should not occur");
+              },
+            },
+          }),
+        ).resolves.toEqual({
+          accessible: false,
+          reason: "invalid-repository-name",
+        });
+        expect(requested).toBe(false);
+      },
+    );
+
+    it("uses the shared credential boundary and removes its temporary checkout", async () => {
+      const authenticatedRemote = await startGitFixtureRemote({
+        credentials: { username: "x-access-token", password: sentinelToken },
+      });
+      const originalToken = process.env[tokenEnvironmentName];
+      const temporaryDirectories = () =>
+        readdirSync(os.tmpdir()).filter((name) =>
+          name.startsWith("piploy-github-access-"),
+        );
+      try {
+        process.env[tokenEnvironmentName] = sentinelToken;
+        authenticatedRemote.commit({ "index.html": "v1" }, "initial");
+        authenticatedRemote.commit({ "index.html": "v2" }, "next");
+        const accessSettings: PiploySettings = {
+          RootDirectory: rootDirectory,
+          Applications: [],
+          GitHubOwnerCredentials: {
+            [githubOwner]: `\${hostEnv:${tokenEnvironmentName}}`,
+          },
+        };
+        const before = temporaryDirectories();
+        const requestBodies: string[] = [];
+
+        await expect(
+          checkGitHubRepositoryAccess(accessSettings, "repo", {
+            http: githubFixtureHttp(authenticatedRemote, (body) => {
+              requestBodies.push(body);
+            }),
+          }),
+        ).resolves.toEqual({ accessible: true });
+
+        expect(authenticatedRemote.authenticatedRequests()).toBeGreaterThan(0);
+        expect(requestBodies).toContainEqual(
+          expect.stringContaining("deepen 1"),
+        );
+        expect(temporaryDirectories()).toEqual(before);
+        expect(accessSettings.Applications).toEqual([]);
+      } finally {
+        if (originalToken === undefined)
+          delete process.env[tokenEnvironmentName];
+        else process.env[tokenEnvironmentName] = originalToken;
+        await authenticatedRemote.close();
+      }
+    });
+
+    it("maps every shared credential and transport failure without retaining a checkout", async () => {
+      const authenticatedRemote = await startGitFixtureRemote({
+        credentials: { username: "x-access-token", password: sentinelToken },
+      });
+      const originalToken = process.env[tokenEnvironmentName];
+      const temporaryDirectories = () =>
+        readdirSync(os.tmpdir()).filter((name) =>
+          name.startsWith("piploy-github-access-"),
+        );
+      const before = temporaryDirectories();
+      const http = githubFixtureHttp(authenticatedRemote);
+      const credentials = {
+        [githubOwner]: `\${hostEnv:${tokenEnvironmentName}}`,
+      };
+      try {
+        authenticatedRemote.commit({ "index.html": "v1" }, "initial");
+
+        await expect(
+          checkGitHubRepositoryAccess(
+            { RootDirectory: rootDirectory, Applications: [] },
+            "repo",
+            { http },
+          ),
+        ).resolves.toEqual({
+          accessible: false,
+          reason: "credential-not-configured",
+        });
+        expect(temporaryDirectories()).toEqual(before);
+
+        delete process.env[tokenEnvironmentName];
+        await expect(
+          checkGitHubRepositoryAccess(
+            {
+              RootDirectory: rootDirectory,
+              Applications: [],
+              GitHubOwnerCredentials: credentials,
+            },
+            "repo",
+            { http },
+          ),
+        ).resolves.toEqual({
+          accessible: false,
+          reason: "credential-environment-missing",
+        });
+        expect(temporaryDirectories()).toEqual(before);
+
+        process.env[tokenEnvironmentName] = "wrong-token";
+        await expect(
+          checkGitHubRepositoryAccess(
+            {
+              RootDirectory: rootDirectory,
+              Applications: [],
+              GitHubOwnerCredentials: credentials,
+            },
+            "repo",
+            { http },
+          ),
+        ).resolves.toEqual({
+          accessible: false,
+          reason: "credential-rejected",
+        });
+        expect(temporaryDirectories()).toEqual(before);
+
+        process.env[tokenEnvironmentName] = sentinelToken;
+        await expect(
+          checkGitHubRepositoryAccess(
+            {
+              RootDirectory: rootDirectory,
+              Applications: [],
+              GitHubOwnerCredentials: credentials,
+            },
+            "missing",
+            { http },
+          ),
+        ).resolves.toEqual({
+          accessible: false,
+          reason: "repository-inaccessible-or-not-found",
+        });
+        expect(temporaryDirectories()).toEqual(before);
+
+        const rawAdapterError = "adapter error /tmp/private-checkout secret";
+        const result = await checkGitHubRepositoryAccess(settings, "repo", {
+          http: {
+            request: async () => {
+              throw new Error(rawAdapterError);
+            },
+          },
+        });
+        expect(result).toEqual({
+          accessible: false,
+          reason: "transport-or-fetch-failure",
+        });
+        expect(JSON.stringify(result)).not.toContain(rawAdapterError);
+        expect(temporaryDirectories()).toEqual(before);
+      } finally {
+        if (originalToken === undefined)
+          delete process.env[tokenEnvironmentName];
+        else process.env[tokenEnvironmentName] = originalToken;
+        await authenticatedRemote.close();
+      }
+    });
+
+    it("cancels the production HTTP adapter before cleaning its temporary directory", async () => {
+      const temporaryDirectories = () =>
+        readdirSync(os.tmpdir()).filter((name) =>
+          name.startsWith("piploy-github-access-"),
+        );
+      const before = temporaryDirectories();
+      let settled = false;
+      const rawAdapterError = "adapter error /tmp/private-checkout secret";
+      const fetch = vi.fn(
+        (_input: string | URL | Request, init?: RequestInit) =>
+          new Promise<Response>((_, reject) => {
+            const signal = init?.signal;
+            const abort = () => {
+              settled = true;
+              reject(new Error(rawAdapterError));
+            };
+            if (signal?.aborted) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
+          }),
+      );
+      vi.stubGlobal("fetch", fetch);
+
+      try {
+        const result = await checkGitHubRepositoryAccess(
+          settings,
+          "repository",
+          {
+            timeoutMilliseconds: 1,
+          },
+        );
+
+        expect(result).toEqual({
+          accessible: false,
+          reason: "transport-or-fetch-failure",
+        });
+        expect(JSON.stringify(result)).not.toContain(rawAdapterError);
+        expect(fetch).toHaveBeenCalledWith(
+          "https://github.com/alundgren/repository.git/info/refs?service=git-upload-pack",
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+        expect(settled).toBe(true);
+        expect(temporaryDirectories()).toEqual(before);
+      } finally {
+        vi.unstubAllGlobals();
       }
     });
   });

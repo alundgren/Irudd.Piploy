@@ -22,8 +22,15 @@ deferred because they add a runtime dependency on the binary or local socket.
 
 ## Exposed tools
 
-The server registers exactly six tools: `status`, `logs`, `poll`, `register`,
-`service-start`, and `service-stop`. `logs` belongs here because it is
+The server registers exactly seven tools: `status`, `logs`, `poll`, `register`,
+`service-start`, `service-stop`, and `check-github-repository-access`. The
+repository-access check accepts one repository-name segment only, fixes the
+owner to `alundgren`, and constructs the GitHub URL inside the daemon. It uses
+a bounded shallow clone in an operating-system temporary directory and removes
+that checkout afterward. It returns only a typed, redacted access result: no
+checkout path, repository content, credentials, raw Git error, or logs. It
+does not register an Application, change configuration, build, or touch Docker.
+`logs` belongs here because it is
 read-only; it returns a bounded tail of one Application's container output,
 unredacted, so anything on the tailnet can read whatever that Application
 prints. `wipeall` and `self-update` are excluded,

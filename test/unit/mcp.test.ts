@@ -53,12 +53,13 @@ describe("mcp server", () => {
     return { client, requests };
   }
 
-  it("exposes exactly the six safe commands as tools", async () => {
+  it("exposes exactly the seven safe commands as tools", async () => {
     const { client } = await start();
 
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "check-github-repository-access",
       "logs",
       "poll",
       "register",
@@ -155,6 +156,41 @@ describe("mcp server", () => {
     expect(requests).toEqual([{ command: "poll" }]);
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(textOf(result))).toEqual({ ok: true, applications });
+  });
+
+  it("routes a repository access check through the daemon dispatcher", async () => {
+    const repositoryAccess = {
+      accessible: false as const,
+      reason: "credential-rejected" as const,
+    };
+    const { client, requests } = await start(() => ({
+      ok: true,
+      repositoryAccess,
+    }));
+
+    const result = await client.callTool({
+      name: "check-github-repository-access",
+      arguments: { repository: "repository" },
+    });
+
+    expect(requests).toEqual([
+      { command: "check-github-repository-access", repository: "repository" },
+    ]);
+    expect(JSON.parse(textOf(result))).toEqual({ ok: true, repositoryAccess });
+  });
+
+  it("rejects a repository URL before dispatching it", async () => {
+    const repository = "https://github.com/alundgren/repository.git";
+    const { client, requests } = await start();
+
+    const result = await client.callTool({
+      name: "check-github-repository-access",
+      arguments: { repository },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).not.toContain(repository);
+    expect(requests).toEqual([]);
   });
 
   it("routes service-stop to the daemon stop command", async () => {

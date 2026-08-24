@@ -9,6 +9,7 @@ import {
   maxLogBytes,
   maxLogTailLines,
 } from "./containerLogs.js";
+import { isGitHubRepositoryName } from "./git.js";
 import type { DaemonRequest, DaemonResponse } from "./daemon.js";
 import type { ApplicationSchema } from "./settings.js";
 import { piployVersion } from "./version.js";
@@ -58,6 +59,13 @@ const registerInputSchema = {
   z.ZodType
 >;
 
+const githubRepositoryNameSchema = z
+  .string()
+  .refine(
+    isGitHubRepositoryName,
+    "Repository must be one GitHub name segment.",
+  );
+
 function toolResult(response: DaemonResponse) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(response) }],
@@ -66,7 +74,7 @@ function toolResult(response: DaemonResponse) {
 }
 
 /**
- * Registers the six commands that are safe to expose on the tailnet. The
+ * Registers the seven commands that are safe to expose on the tailnet. The
  * exclusion of `wipeall` and `self-update` is structural: they are simply
  * never registered here, so there is no block list to keep in sync.
  */
@@ -113,6 +121,22 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     },
     async (application) =>
       toolResult(await dispatch({ command: "register", application })),
+  );
+
+  server.registerTool(
+    "check-github-repository-access",
+    {
+      description:
+        "Check whether Piploy's configured GitHub credential can access one alundgren repository. This performs a shallow temporary clone and returns only a safe access result.",
+      inputSchema: { repository: githubRepositoryNameSchema },
+    },
+    async ({ repository }) =>
+      toolResult(
+        await dispatch({
+          command: "check-github-repository-access",
+          repository,
+        }),
+      ),
   );
 
   server.registerTool(
