@@ -19,6 +19,7 @@ import {
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
+  planRacedContainer,
   resolveContainerEnvironmentVariables,
   type DockerContainer,
   validateDockerfileImageReferences,
@@ -167,6 +168,40 @@ function isPortAlreadyAllocated(error: unknown): boolean {
     error instanceof Error &&
     error.message.includes("port is already allocated")
   );
+}
+
+function isContainerNameConflict(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("is already in use by container")
+  );
+}
+
+function isContainerAlreadyStarted(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { reason?: string }).reason === "container already started"
+  );
+}
+
+function isContainerNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { reason?: string }).reason === "no such container"
+  );
+}
+
+function isContainerRemovalInProgress(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("is already in progress")
+  );
+}
+
+const containerConflictRecheckAttempts = 10;
+const containerConflictRecheckDelayMilliseconds = 150;
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function followBuildProgress(
@@ -342,6 +377,30 @@ export function createDockerService(
     )[0];
   }
 
+  /**
+   * Waits for a container a concurrent poll is already removing to actually
+   * disappear, so this call does not try to create its replacement while the
+   * old name is still reserved. Gives up after the same bounded window used
+   * for the create-conflict recheck rather than waiting indefinitely; the
+   * subsequent create attempt surfaces a real failure if the name is still
+   * taken by then.
+   */
+  async function waitForContainerRemoval(containerId: string): Promise<void> {
+    for (
+      let attempt = 0;
+      attempt < containerConflictRecheckAttempts;
+      attempt++
+    ) {
+      try {
+        await docker.getContainer(containerId).inspect();
+      } catch (inspectError) {
+        if (isContainerNotFound(inspectError)) return;
+        throw inspectError;
+      }
+      await delay(containerConflictRecheckDelayMilliseconds);
+    }
+  }
+
   async function ensureImageExists(
     application: Application,
     commit: GitCommit,
@@ -435,7 +494,14 @@ export function createDockerService(
     }
     if (containerPlan.action === "start") {
       logger.info(`Starting container ${containerName}`);
-      await docker.getContainer(containerPlan.containerId).start();
+      // A concurrent poll can independently reach the same "start" decision
+      // for this container and win the race to start it first; that is the
+      // desired end state, not a failure.
+      try {
+        await docker.getContainer(containerPlan.containerId).start();
+      } catch (startError) {
+        if (!isContainerAlreadyStarted(startError)) throw startError;
+      }
       return {
         wasCreated: false,
         wasStarted: true,
@@ -453,9 +519,21 @@ export function createDockerService(
 
     if (containerPlan.existingContainerId) {
       logger.info(`Removing container ${containerName}`);
-      await docker
-        .getContainer(containerPlan.existingContainerId)
-        .remove({ force: true });
+      // A concurrent poll cycle can be removing (or have already removed)
+      // this same container, e.g. two pollers upgrading the same
+      // application at once. Neither outcome is a failure: the container is
+      // gone, or on its way out, either way.
+      try {
+        await docker
+          .getContainer(containerPlan.existingContainerId)
+          .remove({ force: true });
+      } catch (removeError) {
+        if (isContainerRemovalInProgress(removeError)) {
+          await waitForContainerRemoval(containerPlan.existingContainerId);
+        } else if (!isContainerNotFound(removeError)) {
+          throw removeError;
+        }
+      }
     }
 
     const portBindings: Record<string, Array<{ HostPort: string }>> = {};
@@ -471,19 +549,70 @@ export function createDockerService(
     }
 
     logger.info(`Creating container ${containerName}`);
-    const createdContainer = await docker.createContainer({
-      Image: getImageVersionTagCommit(application.Name, commit),
-      name: containerName,
-      Env: environment,
-      ExposedPorts: exposedPorts,
-      HostConfig: {
-        PortBindings: portBindings,
-        Binds: binds,
-        LogConfig: containerLogConfig,
-        RestartPolicy: containerRestartPolicy,
-      },
-      Labels: { [containerConfigLabelName]: configHash },
-    });
+    let createdContainer: Dockerode.Container;
+    try {
+      createdContainer = await docker.createContainer({
+        Image: getImageVersionTagCommit(application.Name, commit),
+        name: containerName,
+        Env: environment,
+        ExposedPorts: exposedPorts,
+        HostConfig: {
+          PortBindings: portBindings,
+          Binds: binds,
+          LogConfig: containerLogConfig,
+          RestartPolicy: containerRestartPolicy,
+        },
+        Labels: { [containerConfigLabelName]: configHash },
+      });
+    } catch (error) {
+      if (!isContainerNameConflict(error)) throw error;
+
+      // Another poll cycle created the container between our findContainer
+      // check and this create call. Docker reserves the container name
+      // before it registers the container where listContainers can see it,
+      // so the winner can briefly be invisible even though the name is
+      // already taken; poll for it a few times rather than failing on the
+      // first miss.
+      let racedContainer = await findContainer(containerName);
+      for (
+        let attempt = 0;
+        !racedContainer && attempt < containerConflictRecheckAttempts;
+        attempt++
+      ) {
+        await delay(containerConflictRecheckDelayMilliseconds);
+        racedContainer = await findContainer(containerName);
+      }
+      const racedPlan = planRacedContainer(
+        racedContainer ? asDockerContainer(racedContainer) : undefined,
+        commit.hash,
+        configHash,
+      );
+      if (racedPlan.action === "fail") throw error;
+
+      if (racedPlan.action === "adopt") {
+        logger.info(
+          `Container ${containerName} was already created by a concurrent poll; reusing it`,
+        );
+        return {
+          wasCreated: false,
+          wasStarted: false,
+          containerId: racedPlan.containerId,
+        };
+      }
+      logger.info(
+        `Container ${containerName} was already created by a concurrent poll; starting it`,
+      );
+      try {
+        await docker.getContainer(racedPlan.containerId).start();
+      } catch (startError) {
+        if (!isContainerAlreadyStarted(startError)) throw startError;
+      }
+      return {
+        wasCreated: false,
+        wasStarted: true,
+        containerId: racedPlan.containerId,
+      };
+    }
     try {
       logger.info(`Starting container ${containerName}`);
       await createdContainer.start();

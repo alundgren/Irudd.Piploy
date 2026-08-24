@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  isDaemonListening,
   requestDaemon,
   startDaemon,
   getApplicationStatus,
@@ -685,6 +686,29 @@ describe("daemon", () => {
       await client.close();
 
       expect(events).toEqual(["poll", "poll"]);
+    });
+  });
+
+  describe("isDaemonListening", () => {
+    it("is true while a daemon is listening at the socket", async () => {
+      const daemon = await start({
+        getLogs: noLogs,
+        poll: async () => [],
+        getStatus: async () => ({ applications: [] }),
+        attemptSelfUpdate: async () => "up-to-date",
+      });
+
+      await expect(isDaemonListening(daemon.socketPath)).resolves.toBe(true);
+    });
+
+    it("is false for a stale socket file left behind by a daemon that crashed", async () => {
+      const socketPath = path.join(
+        await mkdtemp(path.join(os.tmpdir(), "piploy-")),
+        "piploy.sock",
+      );
+      await writeFile(socketPath, "");
+
+      await expect(isDaemonListening(socketPath)).resolves.toBe(false);
     });
   });
 });
