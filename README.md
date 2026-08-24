@@ -212,8 +212,18 @@ tailnet and from nowhere else. There is no token and no other authentication:
 being on the tailnet is the whole of it. If the machine has no Tailscale
 address, the daemon logs a warning and starts anyway, without the endpoint.
 
-It exposes six tools — `status`, `logs`, `poll`, `register`, `service-start`,
-and `service-stop` — which run exactly what the matching CLI commands do.
+It exposes seven tools — `status`, `logs`, `poll`, `register`, `service-start`,
+`service-stop`, and `check-github-repository-access`. All except
+`service-start` pass through the daemon's command queue; `service-start`
+reports that the already-running daemon is available and enqueues nothing. The
+repository-access check accepts only one
+repository-name segment and always targets `alundgren` on GitHub. It performs a
+bounded, shallow temporary clone to verify access, then removes that checkout.
+It never registers an Application, changes `piploy.json`, runs Docker, or
+returns repository contents, paths, credentials, URLs with credentials, raw
+Git errors, or logs. Its safe result distinguishes missing credentials, an
+unset credential environment variable, rejected credentials, an inaccessible
+repository, and timeout or network failures.
 `wipeall` and `self-update` are deliberately not exposed. See
 [ADR-0008](docs/adr/0008-mcp-server-tailscale-only.md).
 

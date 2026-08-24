@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import git from "isomorphic-git";
@@ -29,6 +31,13 @@ export type GitFailureReason =
   | "credential-rejected"
   | "repository-inaccessible-or-not-found"
   | "transport-or-fetch-failure";
+
+export type GitHubRepositoryAccessResult =
+  | { accessible: true }
+  | {
+      accessible: false;
+      reason: GitFailureReason | "invalid-repository-name";
+    };
 
 export interface GitDiagnostic {
   reason: GitFailureReason;
@@ -207,7 +216,158 @@ async function runRemoteOperation<T>(
   }
 }
 
-type GitHttp = Parameters<typeof git.clone>[0]["http"];
+type GitHttp = NonNullable<Parameters<typeof git.clone>[0]["http"]>;
+type GitHttpRequest = Parameters<GitHttp["request"]>[0];
+type GitHttpResponse = Awaited<ReturnType<GitHttp["request"]>>;
+
+const githubRepositoryNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const githubAccessTemporaryDirectoryPrefix = "piploy-github-access-";
+const githubAccessTimeoutMilliseconds = 10_000;
+
+/** Accepts one GitHub repository-name segment, never a URL or path. */
+export function isGitHubRepositoryName(value: string): boolean {
+  return (
+    value !== "." && value !== ".." && githubRepositoryNamePattern.test(value)
+  );
+}
+
+async function bodyBuffer(
+  body: GitHttpRequest["body"],
+): Promise<Buffer | undefined> {
+  if (body === undefined) return undefined;
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+/**
+ * The bundled isomorphic-git Node adapter ignores `signal`. This small adapter
+ * makes the qualification clone cancellable so cleanup cannot race it.
+ */
+function createAbortableGitHttp(signal: AbortSignal): GitHttp {
+  return {
+    async request({ url, method = "GET", headers = {}, body }) {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: (await bodyBuffer(body)) as unknown as BodyInit | undefined,
+        signal,
+      });
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, name) => {
+        responseHeaders[name] = value;
+      });
+      return {
+        url: response.url,
+        method,
+        headers: responseHeaders,
+        statusCode: response.status,
+        statusMessage: response.statusText,
+        body:
+          response.body === null
+            ? undefined
+            : (async function* () {
+                for await (const chunk of response.body!) yield chunk;
+              })(),
+      } satisfies GitHttpResponse;
+    },
+  };
+}
+
+function withAbortSignal(http: GitHttp, signal: AbortSignal): GitHttp {
+  return {
+    request: (request) => http.request({ ...request, signal }),
+  };
+}
+
+function isGithubAccessTemporaryDirectory(directory: string): boolean {
+  return (
+    path.dirname(path.resolve(directory)) === path.resolve(os.tmpdir()) &&
+    path.basename(directory).startsWith(githubAccessTemporaryDirectoryPrefix)
+  );
+}
+
+export interface GitHubRepositoryAccessOptions {
+  /** Test seam for routing the fixed GitHub URL to a local fixture. */
+  http?: GitHttp;
+  /** Test seam; production always uses the bounded default. */
+  timeoutMilliseconds?: number;
+}
+
+/**
+ * Qualifies access to one fixed-owner GitHub repository without retaining its
+ * checkout or exposing any repository, credential, path, or adapter details.
+ */
+export async function checkGitHubRepositoryAccess(
+  settings: PiploySettings,
+  repository: string,
+  options: GitHubRepositoryAccessOptions = {},
+): Promise<GitHubRepositoryAccessResult> {
+  if (!isGitHubRepositoryName(repository)) {
+    return { accessible: false, reason: "invalid-repository-name" };
+  }
+
+  let directory: string | undefined;
+  let result: GitHubRepositoryAccessResult = {
+    accessible: false,
+    reason: "transport-or-fetch-failure",
+  };
+  try {
+    directory = await mkdtemp(
+      path.join(os.tmpdir(), githubAccessTemporaryDirectoryPrefix),
+    );
+    if (!isGithubAccessTemporaryDirectory(directory)) return result;
+    const temporaryDirectory = directory;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      options.timeoutMilliseconds ?? githubAccessTimeoutMilliseconds,
+    );
+    try {
+      const remoteHttp = withAbortSignal(
+        options.http ?? createAbortableGitHttp(controller.signal),
+        controller.signal,
+      );
+      await runRemoteOperation(settings, (authentication) =>
+        git.clone({
+          fs,
+          http: remoteHttp,
+          dir: temporaryDirectory,
+          url: `https://github.com/alundgren/${repository}.git`,
+          depth: 1,
+          singleBranch: true,
+          ...authentication,
+        }),
+      );
+      result = { accessible: true };
+    } catch (error) {
+      result =
+        error instanceof GitOperationError
+          ? { accessible: false, reason: error.diagnostic.reason }
+          : result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    // A temporary-directory failure is an operational failure, not a detail to
+    // log or return to a tailnet caller.
+  } finally {
+    if (
+      directory !== undefined &&
+      isGithubAccessTemporaryDirectory(directory)
+    ) {
+      try {
+        await rm(directory, { recursive: true, force: true });
+      } catch {
+        if (result.accessible) {
+          result = { accessible: false, reason: "transport-or-fetch-failure" };
+        }
+      }
+    }
+  }
+  return result;
+}
 
 function hasGitDirectory(repoDirectory: string): boolean {
   return fs.existsSync(path.join(repoDirectory, ".git"));

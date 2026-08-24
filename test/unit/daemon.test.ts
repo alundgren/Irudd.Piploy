@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createDaemonDeps,
   isDaemonListening,
   requestDaemon,
   startDaemon,
@@ -45,6 +46,19 @@ const noLogs: DaemonDeps["getLogs"] = async () => ({
   ok: false,
   reason: "unknown-application",
 });
+
+type TestDaemonDeps = Omit<DaemonDeps, "checkGitHubRepositoryAccess"> &
+  Partial<Pick<DaemonDeps, "checkGitHubRepositoryAccess">>;
+
+function completeDeps(deps: TestDaemonDeps): DaemonDeps {
+  return {
+    checkGitHubRepositoryAccess: async () => ({
+      accessible: false,
+      reason: "transport-or-fetch-failure",
+    }),
+    ...deps,
+  };
+}
 
 function sendRequest(
   socketPath: string,
@@ -101,7 +115,7 @@ describe("daemon", () => {
   });
 
   async function start(
-    deps: DaemonDeps,
+    deps: TestDaemonDeps,
     queueCapacity?: number,
   ): Promise<Daemon> {
     const socketPath = path.join(
@@ -112,7 +126,7 @@ describe("daemon", () => {
       socketPath,
       queueCapacity,
       pollIntervalMinutes: 60,
-      deps,
+      deps: completeDeps(deps),
       ...noTailscale,
     });
     daemons.push(daemon);
@@ -182,6 +196,87 @@ describe("daemon", () => {
       ),
     ).resolves.toEqual({ ok: true, logs });
     expect(requested).toEqual([{ application: "app", tail: 50 }]);
+  });
+
+  it("routes repository access checks through the daemon queue", async () => {
+    const requested: string[] = [];
+    const daemon = await start({
+      getLogs: noLogs,
+      checkGitHubRepositoryAccess: async (repository) => {
+        requested.push(repository);
+        return { accessible: false, reason: "credential-rejected" };
+      },
+      poll: async () => [],
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+
+    await expect(
+      sendRequest(daemon.socketPath, {
+        command: "check-github-repository-access",
+        repository: "repository",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      repositoryAccess: { accessible: false, reason: "credential-rejected" },
+    });
+    expect(requested).toEqual(["repository"]);
+  });
+
+  it("keeps actual repository-access failures out of daemon output and configuration", async () => {
+    const token = "sentinel-github-token";
+    const rawAdapterError = "adapter error /tmp/private-checkout secret";
+    const repositoryContent = "private repository content";
+    const messages: string[] = [];
+    const logger: Logger = {
+      debug: (message) => messages.push(message),
+      info: (message) => messages.push(message),
+      warn: (message) => messages.push(message),
+      error: (message) => messages.push(message),
+      child: () => logger,
+    };
+    const accessSettings: PiploySettings = {
+      RootDirectory: "/tmp/piploy",
+      Applications: [],
+      GitHubOwnerCredentials: {
+        alundgren: "${hostEnv:PIPLOY_GITHUB_TOKEN}",
+      },
+    };
+    const before = JSON.stringify(accessSettings);
+    vi.stubGlobal("fetch", () => Promise.reject(new Error(rawAdapterError)));
+    try {
+      const daemon = await startDaemon(accessSettings, logger, {
+        socketPath: path.join(
+          await mkdtemp(path.join(os.tmpdir(), "piploy-")),
+          "piploy.sock",
+        ),
+        pollIntervalMinutes: 60,
+        deps: createDaemonDeps(accessSettings, logger),
+        ...noTailscale,
+      });
+      daemons.push(daemon);
+
+      const response = await sendRequest(daemon.socketPath, {
+        command: "check-github-repository-access",
+        repository: "repository",
+      });
+
+      expect(response).toEqual({
+        ok: true,
+        repositoryAccess: {
+          accessible: false,
+          reason: "transport-or-fetch-failure",
+        },
+      });
+      const observable = `${JSON.stringify(response)}\n${messages.join("\n")}`;
+      expect(observable).not.toContain(token);
+      expect(observable).not.toContain(rawAdapterError);
+      expect(observable).not.toContain(repositoryContent);
+      expect(observable).not.toContain("piploy-github-access-");
+      expect(JSON.stringify(accessSettings)).toBe(before);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("reports an application with no container as a distinct logs rejection", async () => {
@@ -357,6 +452,10 @@ describe("daemon", () => {
         socketPath,
         pollIntervalMinutes: 1,
         deps: {
+          checkGitHubRepositoryAccess: async () => ({
+            accessible: false,
+            reason: "transport-or-fetch-failure",
+          }),
           attemptSelfUpdate: async () => {
             events.push("update");
             return updateResult;
@@ -414,7 +513,7 @@ describe("daemon", () => {
     };
 
     async function startWithConfig(
-      deps: DaemonDeps,
+      deps: TestDaemonDeps,
       registered: unknown[] = [],
     ): Promise<{
       daemon: Daemon;
@@ -437,14 +536,14 @@ describe("daemon", () => {
         socketPath: path.join(directory, "piploy.sock"),
         configPath,
         pollIntervalMinutes: 60,
-        deps,
+        deps: completeDeps(deps),
         ...noTailscale,
       });
       daemons.push(daemon);
       return { daemon, configPath, liveSettings };
     }
 
-    function idleDeps(): DaemonDeps {
+    function idleDeps(): TestDaemonDeps {
       return {
         getLogs: noLogs,
         poll: async () => [],
@@ -613,7 +712,7 @@ describe("daemon", () => {
 
     async function startWithAddress(
       address: string | undefined,
-      deps: DaemonDeps,
+      deps: TestDaemonDeps,
       // Port 0 keeps the test off the fixed v1 port.
       mcpPort = 0,
     ): Promise<{ daemon: Daemon; messages: string[] }> {
@@ -628,7 +727,7 @@ describe("daemon", () => {
         {
           socketPath,
           pollIntervalMinutes: 60,
-          deps,
+          deps: completeDeps(deps),
           mcpPort,
           getTailscaleAddress: () => address,
         },
