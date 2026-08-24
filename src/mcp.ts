@@ -85,7 +85,7 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "status",
     {
       description:
-        "Report each registered application's configured host-to-container port mappings (an empty array means none), git commits, Docker image and container hashes, whether it runs the latest version, and its container's state, exit code, and restart count. A 'restarting' state with a non-zero exit code means the container is crash-looping. `git: null` with `gitError` means the fetch failed; without `gitError`, the repository has not been cloned.",
+        "Report each registered application's configured localhost-only host-to-container port mappings on this Pi (an empty array means none), git commits, Docker image and container hashes, whether it runs the latest version, and its container's state, exit code, and restart count. A 'restarting' state with a non-zero exit code means the container is crash-looping. `git: null` with `gitError` means the fetch failed; without `gitError`, the repository has not been cloned.",
     },
     async () => toolResult(await dispatch({ command: "status" })),
   );

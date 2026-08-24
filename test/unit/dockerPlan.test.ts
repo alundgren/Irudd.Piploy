@@ -134,6 +134,55 @@ describe("planContainer", () => {
     );
   });
 
+  it("recreates mapped containers while preserving legacy hashes without mappings", () => {
+    const legacyUnmappedHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          environmentVariables: [],
+          volumes: [],
+          portMappings: [],
+          logConfig: {
+            Type: "json-file",
+            Config: { "max-size": "10m", "max-file": "3" },
+          },
+          restartPolicy: { Name: "unless-stopped" },
+        }),
+      )
+      .digest("hex");
+    const mappings = [{ hostPort: 8080, containerPort: 80 }];
+    const legacyMappedHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          environmentVariables: [],
+          volumes: [],
+          portMappings: mappings,
+          logConfig: {
+            Type: "json-file",
+            Config: { "max-size": "10m", "max-file": "3" },
+          },
+          restartPolicy: { Name: "unless-stopped" },
+        }),
+      )
+      .digest("hex");
+
+    expect(getContainerConfigHash({})).toBe(legacyUnmappedHash);
+    expect(getContainerConfigHash({ portMappings: mappings })).not.toBe(
+      legacyMappedHash,
+    );
+    expect(
+      planContainer(
+        {
+          id: "container",
+          state: "running",
+          gitTipCommit: "commit",
+          configHash: legacyMappedHash,
+        },
+        "commit",
+        getContainerConfigHash({ portMappings: mappings }),
+      ),
+    ).toEqual({ action: "recreate", existingContainerId: "container" });
+  });
+
   it("hashes a host-environment reference declaratively", () => {
     const reference = "${hostEnv:CONTAINER_TOKEN}";
     const hash = getContainerConfigHash({

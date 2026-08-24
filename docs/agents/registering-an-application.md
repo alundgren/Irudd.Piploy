@@ -22,7 +22,9 @@ registered Applications, their configured host-to-container `portMappings`,
 and their Git and Docker state. `portMappings` is always an array: an empty
 array means that Application has no configured host ports. Each entry has a
 `hostPort` and `containerPort`, corresponding to the `"hostPort:containerPort"`
-form in an Application payload.
+form in an Application payload. Every configured host port is local to the Pi
+and reachable through `localhost`, not directly through a LAN, Tailscale, or
+public IP address.
 
 Use those configured host ports to avoid a conflict with another Piploy
 Application when proposing `PortMappings`. This is not a host-wide port scan:
@@ -38,8 +40,8 @@ Before proposing a change, inspect the application repository and confirm:
 - that every `COPY` and `ADD` source in that Dockerfile resolves inside the
   Dockerfile's own directory, because that directory, not the repository root,
   is the build context Piploy sends to Docker;
-- which ports the container listens on and which, if any, should be exposed on
-  the host;
+- which ports the container listens on and which, if any, need a Pi-local
+  endpoint;
 - the environment variables the container needs, including their literal
   values; and
 - which writable paths need to survive a container replacement.
@@ -62,7 +64,7 @@ the persisted form: `PortMappings` and `Volumes` remain strings in
 | `Name` | Yes | A string containing only letters, numbers, `_`, and `-`. It must not exactly match an already registered Application name; comparison is case-sensitive. | Stored as submitted and used to identify the Application and its data directory. |
 | `GitRepositoryUrl` | Yes | Any string at payload validation; it must identify a repository Piploy can clone when it polls. | Stored as submitted. A Poll clones it when absent, otherwise fetches it and resets the local clone to the remote tip. |
 | `DockerfilePath` | Yes | Any string at payload validation. During a Poll it must identify a Dockerfile relative to the repository root; a path ending in `/` is rejected. Piploy trims whitespace, accepts `\\` as separators, and strips one leading `/`; examples include `Dockerfile`, `SubDirectory/Dockerfile`, and `Dockerfile.custom`. | Stored as submitted. Its parent path, not the repository root, is the Docker build context: a Dockerfile in a subdirectory can only `COPY` from that subdirectory. |
-| `PortMappings` | No | An array of strings, each exactly `<hostPort>:<containerPort>` with digits on both sides, for example `"8080:80"`. | Stored as submitted; parsed into host/container port pairs for the container. Omit it when no host port should be exposed. |
+| `PortMappings` | No | An array of strings, each exactly `<hostPort>:<containerPort>` with digits on both sides, for example `"8080:80"`. | Stored as submitted; parsed into host/container port pairs and bound only to localhost on the Pi. Omit it when the Application needs no Pi-local endpoint. |
 | `Volumes` | No | An array of strings, each `<name>:/container/path`. `name` uses letters, numbers, `_`, or `-`. The container path is absolute, has at least one segment, contains neither `:` nor `..`, and cannot be `/`. Two Volumes for one Application cannot target the same container path. | Stored as submitted; parsed into a named Volume and its container path for the container. |
 | `EnvironmentVariables` | No | An object whose keys and values are strings. Values are literal except an entire `${hostEnv:NAME}` reference, where `NAME` starts with a letter or `_` and otherwise contains only letters, digits, or `_`. Other interpolation-like values remain literal. | Stored as submitted. Piploy uses a host-environment reference itself in the container identity, then resolves it when creating or recreating the container. Piploy has no secret store, so a literal credential is written to `piploy.json` in plaintext. See the production-change gate for how to keep one out of the approval record without weakening the gate. |
 
@@ -157,7 +159,9 @@ ask for explicit human permission before falling back to SSH.
 Cloudflare Tunnel configuration is currently manual. After the Application is
 running, use the chosen **host** side of its `PortMappings` entry as the tunnel
 service port — not the container port. For example, a mapping of
-`"8080:80"` means Piploy publishes container port `80` on host port `8080`,
-so the Cloudflare Tunnel public-hostname service must point to
+`"8080:80"` means Piploy publishes container port `80` on localhost port
+`8080` on the Pi, so the Cloudflare Tunnel public-hostname service must point to
 `http://localhost:8080` (or the equivalent local-host service address for the
-tunnel process). State this mapping to the human who maintains the tunnel.
+tunnel process). The tunnel process must run on the Pi or have an explicit
+route to that loopback endpoint. State this mapping to the human who maintains
+the tunnel.

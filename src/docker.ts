@@ -15,6 +15,7 @@ import { pack } from "tar-fs";
 import { decodeContainerLog, limitLogBytes } from "./containerLogs.js";
 import {
   containerLogConfig,
+  containerPortBindingHostIps,
   containerRestartPolicy,
   getBuildContextPathFromSetting,
   getContainerConfigHash,
@@ -576,11 +577,17 @@ export function createDockerService(
       }
     }
 
-    const portBindings: Record<string, Array<{ HostPort: string }>> = {};
+    const portBindings: Record<
+      string,
+      Array<{ HostIp: string; HostPort: string }>
+    > = {};
     const exposedPorts: Record<string, object> = {};
     for (const portMapping of application.PortMappings ?? []) {
       const port = `${portMapping.containerPort}/tcp`;
-      portBindings[port] = [{ HostPort: String(portMapping.hostPort) }];
+      const bindings = (portBindings[port] ??= []);
+      for (const HostIp of containerPortBindingHostIps) {
+        bindings.push({ HostIp, HostPort: String(portMapping.hostPort) });
+      }
       exposedPorts[port] = {};
     }
 

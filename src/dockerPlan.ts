@@ -71,6 +71,9 @@ export const containerLogConfig = {
  */
 export const containerRestartPolicy = { Name: "unless-stopped" } as const;
 
+/** Every published application port stays reachable only from this Pi. */
+export const containerPortBindingHostIps = ["127.0.0.1", "::1"] as const;
+
 export function planImage(existingImage?: DockerImage): ImagePlan {
   return existingImage
     ? { action: "reuse", imageId: existingImage.id }
@@ -144,16 +147,20 @@ export function planRacedContainer(
 export function getContainerConfigHash(
   configuration: ContainerConfiguration,
 ): string {
+  const portMappings = [...(configuration.portMappings ?? [])].sort(
+    (left, right) =>
+      left.hostPort - right.hostPort ||
+      left.containerPort - right.containerPort,
+  );
   const normalized = {
     environmentVariables: [
       ...(configuration.environmentVariables ?? []),
     ].sort(),
     volumes: [...(configuration.volumes ?? [])].sort(),
-    portMappings: [...(configuration.portMappings ?? [])].sort(
-      (left, right) =>
-        left.hostPort - right.hostPort ||
-        left.containerPort - right.containerPort,
-    ),
+    portMappings,
+    ...(portMappings.length > 0
+      ? { portBindingHostIps: containerPortBindingHostIps }
+      : {}),
     logConfig: containerLogConfig,
     restartPolicy: containerRestartPolicy,
   };

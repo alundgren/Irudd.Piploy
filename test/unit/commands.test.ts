@@ -68,7 +68,9 @@ describe("commands", () => {
     expect(deps.requestDaemon).toHaveBeenCalledWith({ command: "status" });
     expect(deps.computeStatusInline).not.toHaveBeenCalled();
     expect(output).toHaveBeenCalledWith("Background service: running");
-    expect(output).toHaveBeenCalledWith("  Port mappings: 8080:80");
+    expect(output).toHaveBeenCalledWith(
+      "  Port mappings (localhost on this Pi only): 8080:80",
+    );
   });
 
   it("prints an explicit no-port-mappings state", async () => {

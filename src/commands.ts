@@ -99,8 +99,18 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
     console.log(
       `  Running container hash: ${application.docker.runningContainerHash ?? "none"}`,
     );
+    const portMappings =
+      application.portMappings.length === 0
+        ? "none"
+        : application.portMappings
+            .map(
+              ({ hostPort, containerPort }) => `${hostPort}:${containerPort}`,
+            )
+            .join(", ");
     console.log(
-      `  Port mappings: ${application.portMappings.length === 0 ? "none" : application.portMappings.map(({ hostPort, containerPort }) => `${hostPort}:${containerPort}`).join(", ")}`,
+      application.portMappings.length === 0
+        ? `  Port mappings: ${portMappings}`
+        : `  Port mappings (localhost on this Pi only): ${portMappings}`,
     );
     const container = application.docker.container;
     console.log(`  Container state: ${container?.state ?? "none"}`);
