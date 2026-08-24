@@ -372,9 +372,11 @@ export function createDockerService(
   async function findContainer(
     name: string,
   ): Promise<Dockerode.ContainerInfo | undefined> {
-    return (
-      await docker.listContainers({ all: true, filters: { name: [name] } })
-    )[0];
+    const containers = await docker.listContainers({
+      all: true,
+      filters: { name: [name] },
+    });
+    return containers.find(({ Names }) => Names.includes(`/${name}`));
   }
 
   /**
