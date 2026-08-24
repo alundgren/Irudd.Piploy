@@ -13,6 +13,10 @@ import { getBuildContextPathFromSetting } from "./dockerPlan.js";
 import { isDuplicateApplicationName } from "./registerPolicy.js";
 
 const portMappingPattern = /^(\d+):(\d+)$/;
+const hostEnvironmentReferencePattern =
+  /^\$\{hostEnv:([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const githubOwnerPattern =
+  /^(?=.{1,39}$)(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 // The container path is a plain absolute path: no colons, because Docker reads
 // a third bind field as mount options, and at least one segment, because the
 // container root is not a mount point.
@@ -58,6 +62,32 @@ const BuildContextPathSchema = z.string().superRefine((value, ctx) => {
   }
 });
 
+/** Returns the referenced daemon environment-variable name for an exact reference. */
+export function parseHostEnvironmentReference(
+  value: string,
+): string | undefined {
+  return hostEnvironmentReferencePattern.exec(value)?.[1];
+}
+
+const HostEnvironmentReferenceSchema = z.string().superRefine((value, ctx) => {
+  if (parseHostEnvironmentReference(value) === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Must be an exact ${hostEnv:NAME} reference",
+    });
+  }
+});
+
+const GitHubOwnerCredentialsSchema = z.record(
+  z
+    .string()
+    .regex(
+      githubOwnerPattern,
+      "GitHub owner must be canonical lowercase letters, digits, or hyphens",
+    ),
+  HostEnvironmentReferenceSchema,
+);
+
 export const ApplicationSchema = z
   .object({
     Name: z.string().regex(/^[A-Za-z0-9_-]+$/),
@@ -85,6 +115,7 @@ const PiploySettingsSchema = z.object({
   RootDirectory: z.string(),
   MinutesBetweenBackgroundPolls: z.number().optional(),
   Applications: z.array(ApplicationSchema),
+  GitHubOwnerCredentials: GitHubOwnerCredentialsSchema.optional(),
   IsTestRun: z.boolean().optional(),
 });
 

@@ -10,11 +10,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   requestDaemon,
   startDaemon,
+  getApplicationStatus,
   type Daemon,
   type DaemonDeps,
   type DaemonResponse,
 } from "../../src/daemon.js";
 import type { Logger } from "../../src/logger.js";
+import { GitOperationError } from "../../src/git.js";
 import { loadSettings, type PiploySettings } from "../../src/settings.js";
 
 const settings: PiploySettings = {
@@ -63,6 +65,38 @@ describe("daemon", () => {
   afterEach(async () => {
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop()));
     vi.useRealTimers();
+  });
+
+  it("keeps Docker status when Git status returns a safe diagnostic", async () => {
+    const application = {
+      Name: "app",
+      GitRepositoryUrl: "https://github.com/alundgren/app.git",
+      DockerfilePath: "Dockerfile",
+    };
+
+    await expect(
+      getApplicationStatus(
+        application,
+        Promise.reject(
+          new GitOperationError({
+            reason: "credential-not-configured",
+            message:
+              "No credential is configured for GitHub owner 'alundgren'.",
+          }),
+        ),
+        Promise.resolve({ runningContainerHash: "current" }),
+      ),
+    ).resolves.toEqual({
+      application: "app",
+      portMappings: [],
+      git: null,
+      gitError: {
+        reason: "credential-not-configured",
+        message: "No credential is configured for GitHub owner 'alundgren'.",
+      },
+      docker: { runningContainerHash: "current" },
+      isRunningLatestVersion: false,
+    });
   });
 
   async function start(

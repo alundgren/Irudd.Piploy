@@ -23,6 +23,25 @@ value to its normal diagnostics. A daemon-environment change takes effect only
 after restarting the daemon and a later configuration- or commit-driven
 container recreation; all other interpolation-like strings remain literal.
 
+`GitHubOwnerCredentials` is an optional root-level mapping of canonical
+lowercase GitHub owners to exact `${hostEnv:NAME}` references. Piploy retains
+only those references. It reads a mapped value only when isomorphic-git asks to
+authenticate an exact `https://github.com/<owner>/<repository>` request, then
+passes it only through that request's authentication callback. SSH URLs,
+userinfo, alternate ports, lookalike hosts, other owners, and non-GitHub hosts
+never receive a credential. Resolved GitHub values are absent from persisted
+configuration, Git remotes, Docker input and hashes, normal logs, errors, and
+CLI/MCP results. A token change takes effect after the daemon restarts.
+
+Git operations report only these safe failures across the adapter boundary:
+credential not configured, configured host variable missing, credential
+rejected, repository inaccessible or not found, and transport or fetch failure.
+Status keeps the application's Docker state when a Git fetch fails, sets
+`git` to `null`, and includes the safe diagnostic. A `null` Git value without a
+diagnostic still means the repository has not been cloned. GitHub's ambiguous
+private-repository 404 is reported as inaccessible or not found, never as a
+rejected credential.
+
 `RootDirectory` is rejected when it overlaps the data directory in either
 direction, because `wipeall` deletes `RootDirectory` recursively and
 Application data must survive it (see

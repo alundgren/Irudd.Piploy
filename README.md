@@ -168,6 +168,37 @@ in its ordinary diagnostics. Restart the daemon after changing its environment,
 then make a configuration or commit change that recreates the container for the
 new value to apply. Other interpolation-like values remain literal.
 
+### Private GitHub repositories
+
+`GitHubOwnerCredentials` is an optional root-level mapping for private HTTPS
+repositories. Each key is a canonical lowercase GitHub owner and each value is
+an exact daemon-environment reference. For example:
+
+```json
+{
+  "Piploy": {
+    "RootDirectory": "/home/irudd/Piploy/root",
+    "Applications": [],
+    "GitHubOwnerCredentials": {
+      "alundgren": "${hostEnv:PIPLOY_GITHUB_TOKEN}"
+    }
+  }
+}
+```
+
+Piploy reads the token only when Git asks to authenticate an HTTPS request for
+`github.com/alundgren/<repository>`. It never writes the token to
+`piploy.json`, a Git remote, a Docker context, normal logs, or CLI and MCP
+results. Other hosts, SSH URLs, URLs with userinfo, lookalike hosts, and other
+owners never receive it. Restart the daemon after setting or renewing the host
+environment variable.
+
+When a status fetch cannot complete, Piploy still reports Docker state and adds
+a safe Git diagnostic. It distinguishes a missing mapping, an unset host
+variable, a rejected credential, a repository that is missing or inaccessible,
+and a general fetch failure. GitHub's private-repository response is reported
+as "Repository not found or inaccessible", not as a bad token.
+
 ## MCP server
 
 While the daemon runs, it also serves an MCP endpoint over Streamable HTTP at:

@@ -1,5 +1,10 @@
 import { createDockerService, PortAlreadyInUseError } from "./docker.js";
-import { ensureLocalRepository, getLatestCommit } from "./git.js";
+import {
+  ensureLocalRepository,
+  getLatestCommit,
+  GitOperationError,
+  type GitDiagnostic,
+} from "./git.js";
 import type { Logger } from "./logger.js";
 import type { Application, PiploySettings } from "./settings.js";
 
@@ -29,6 +34,7 @@ export type PollApplicationResult =
       stage: PollFailureStage;
       message: string;
       code?: "portAlreadyInUse";
+      gitError?: GitDiagnostic;
     };
 
 export type PollFailureStage = "fetch" | "build" | "start";
@@ -89,12 +95,15 @@ export function createOrchestrator(
           await deps.ensureContainerRunning(application, commit);
           results.push({ application: application.Name, ok: true });
         } catch (error) {
-          logError(applicationLogger, error);
+          const gitError =
+            error instanceof GitOperationError ? error.diagnostic : undefined;
+          logError(applicationLogger, gitError?.message ?? error);
           results.push({
             application: application.Name,
             ok: false,
             stage,
-            message: errorMessage(error),
+            message: gitError?.message ?? errorMessage(error),
+            ...(gitError === undefined ? {} : { gitError }),
             ...(error instanceof PortAlreadyInUseError
               ? { code: error.code }
               : {}),

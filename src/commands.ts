@@ -87,6 +87,9 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
     console.log(
       `  Latest remote commit: ${application.git?.remote.hash ?? "none"}`,
     );
+    if (application.gitError !== undefined) {
+      console.log(`  Git error: ${application.gitError.message}`);
+    }
     console.log(
       `  Latest image hash: ${application.docker.latestImageHash ?? "none"}`,
     );

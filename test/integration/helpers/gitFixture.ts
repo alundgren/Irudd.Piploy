@@ -26,9 +26,16 @@ function runGit(cwd: string, args: string[]): string {
 export interface GitFixtureRemote {
   /** The clone URL of the served fixture repository. */
   url: string;
+  /** The base URL used when a test proxy rewrites a production GitHub URL. */
+  baseUrl: string;
   /** Writes `files`, commits, and pushes to the served remote. Returns the new commit hash. */
   commit(files: Record<string, string>, message?: string): string;
+  authenticatedRequests(): number;
   close(): Promise<void>;
+}
+
+interface GitFixtureOptions {
+  credentials?: { username: string; password: string };
 }
 
 /**
@@ -37,7 +44,9 @@ export interface GitFixtureRemote {
  * communicates with remotes over HTTP(S), so a plain local-directory remote
  * cannot exercise the clone path.
  */
-export async function startGitFixtureRemote(): Promise<GitFixtureRemote> {
+export async function startGitFixtureRemote(
+  options: GitFixtureOptions = {},
+): Promise<GitFixtureRemote> {
   const root = mkdtempSync(path.join(os.tmpdir(), "piploy-git-fixture-"));
   const reposDirectory = path.join(root, "repos");
   const workDirectory = path.join(root, "work");
@@ -59,7 +68,26 @@ export async function startGitFixtureRemote(): Promise<GitFixtureRemote> {
     path.join(reposDirectory, "repo.git"),
   ]);
 
-  const server = new GitServer(reposDirectory, { autoCreate: false });
+  let authenticatedRequestCount = 0;
+  const server = new GitServer(reposDirectory, {
+    autoCreate: false,
+    ...(options.credentials === undefined
+      ? {}
+      : {
+          authenticate: ({ user }, next) =>
+            user((username, password) => {
+              if (
+                username === options.credentials!.username &&
+                password === options.credentials!.password
+              ) {
+                authenticatedRequestCount += 1;
+                next();
+                return;
+              }
+              next(new Error("Authentication rejected"));
+            }),
+        }),
+  });
   await new Promise<void>((resolve) => {
     server.listen(0, undefined, () => resolve());
   });
@@ -72,7 +100,8 @@ export async function startGitFixtureRemote(): Promise<GitFixtureRemote> {
   ) {
     throw new Error("Expected the git fixture server to bind to a TCP port");
   }
-  const url = `http://127.0.0.1:${address.port}/repo.git`;
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const url = `${baseUrl}/repo.git`;
 
   function commit(
     files: Record<string, string>,
@@ -92,5 +121,11 @@ export async function startGitFixtureRemote(): Promise<GitFixtureRemote> {
     rmSync(root, { recursive: true, force: true });
   }
 
-  return { url, commit, close };
+  return {
+    url,
+    baseUrl,
+    commit,
+    authenticatedRequests: () => authenticatedRequestCount,
+    close,
+  };
 }
