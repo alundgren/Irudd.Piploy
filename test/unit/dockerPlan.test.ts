@@ -8,6 +8,7 @@ import {
   getDockerfilePathFromSetting,
   planContainer,
   planImage,
+  planRacedContainer,
   resolveContainerEnvironmentVariables,
   validateDockerfileImageReferences,
 } from "../../src/dockerPlan.js";
@@ -169,6 +170,91 @@ describe("planContainer", () => {
 
     expect(getContainerConfigHash({})).not.toBe(previousHash);
   });
+});
+
+describe("planRacedContainer", () => {
+  const configHash = getContainerConfigHash({});
+
+  it("fails when no container won the race", () => {
+    expect(planRacedContainer(undefined, "commit", configHash)).toEqual({
+      action: "fail",
+    });
+  });
+
+  it("fails when the container that won the race is a different commit", () => {
+    expect(
+      planRacedContainer(
+        {
+          id: "container",
+          state: "running",
+          gitTipCommit: "other",
+          configHash,
+        },
+        "commit",
+        configHash,
+      ),
+    ).toEqual({ action: "fail" });
+  });
+
+  it("fails when the container that won the race has a different config", () => {
+    expect(
+      planRacedContainer(
+        {
+          id: "container",
+          state: "running",
+          gitTipCommit: "commit",
+          configHash: getContainerConfigHash({
+            portMappings: [{ hostPort: 8080, containerPort: 80 }],
+          }),
+        },
+        "commit",
+        configHash,
+      ),
+    ).toEqual({ action: "fail" });
+  });
+
+  it("adopts a running container that matches the requested commit and config", () => {
+    expect(
+      planRacedContainer(
+        {
+          id: "container",
+          state: "running",
+          gitTipCommit: "commit",
+          configHash,
+        },
+        "commit",
+        configHash,
+      ),
+    ).toEqual({ action: "adopt", containerId: "container" });
+  });
+
+  it("adopts a restarting container that matches the requested commit and config", () => {
+    expect(
+      planRacedContainer(
+        {
+          id: "container",
+          state: "restarting",
+          gitTipCommit: "commit",
+          configHash,
+        },
+        "commit",
+        configHash,
+      ),
+    ).toEqual({ action: "adopt", containerId: "container" });
+  });
+
+  it.each(["created", "exited", "paused"] as const)(
+    "starts a matching container still in the %s state",
+    (state) => {
+      expect(
+        planRacedContainer(
+          { id: "container", state, gitTipCommit: "commit", configHash },
+          "commit",
+          configHash,
+        ),
+      ).toEqual({ action: "start", containerId: "container" });
+    },
+  );
 });
 
 describe("resolveContainerEnvironmentVariables", () => {

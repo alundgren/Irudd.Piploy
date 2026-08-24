@@ -32,6 +32,11 @@ export type ContainerPlan =
   | { action: "start"; containerId: string }
   | { action: "recreate"; existingContainerId?: string };
 
+export type RacedContainerPlan =
+  | { action: "adopt"; containerId: string }
+  | { action: "start"; containerId: string }
+  | { action: "fail" };
+
 export interface DockerfilePath {
   contextDirectory: string;
   dockerfileName: string;
@@ -97,6 +102,38 @@ export function planContainer(
   }
 
   return { action: "recreate", existingContainerId: existingContainer.id };
+}
+
+/**
+ * Decides what to do with a container that a concurrent poll created after a
+ * name-conflict create failure. Unlike planContainer, an unusable state here
+ * does not mean "recreate": the caller has already lost the create race, so
+ * removing this container would only invite another conflict. A container
+ * whose labels match the requested commit and config is exactly the one this
+ * call wanted, and is started (a race winner is not yet running the instant
+ * after Docker registers its name) unless it already is. A mismatch, or no
+ * container at all, means the name conflict was real, not benign.
+ */
+export function planRacedContainer(
+  existingContainer: DockerContainer | undefined,
+  gitTipCommit: string,
+  configHash: string,
+): RacedContainerPlan {
+  if (
+    !existingContainer ||
+    existingContainer.gitTipCommit !== gitTipCommit ||
+    existingContainer.configHash !== configHash
+  ) {
+    return { action: "fail" };
+  }
+
+  if (
+    existingContainer.state === "running" ||
+    existingContainer.state === "restarting"
+  ) {
+    return { action: "adopt", containerId: existingContainer.id };
+  }
+  return { action: "start", containerId: existingContainer.id };
 }
 
 /**

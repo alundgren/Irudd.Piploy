@@ -54,9 +54,19 @@ const contextApplication = {
   DockerfilePath: "context/Dockerfile",
   BuildContextPath: "context",
 };
+const raceApplication = {
+  Name: `${applicationName}race`,
+  GitRepositoryUrl: "https://example.invalid/integration.git",
+  DockerfilePath: "Dockerfile",
+};
 const settings: PiploySettings = {
   RootDirectory: path.join(temporaryDirectory, "root"),
-  Applications: [application, crashingApplication, contextApplication],
+  Applications: [
+    application,
+    crashingApplication,
+    contextApplication,
+    raceApplication,
+  ],
   IsTestRun: true,
 };
 const docker = createDockerService(settings, logger);
@@ -250,6 +260,58 @@ describe("docker adapter", () => {
         }),
       ).rejects.toThrow();
     }
+
+    await docker.cleanupTestCreated();
+  });
+
+  it("resolves a concurrent create race for the same version but not a mismatched one", async () => {
+    const repoDirectory = path.join(
+      settings.RootDirectory,
+      raceApplication.Name,
+      "repo",
+    );
+    await mkdir(repoDirectory, { recursive: true });
+    await writeFile(
+      path.join(repoDirectory, "Dockerfile"),
+      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "while true; do sleep 3600; done"]\n',
+    );
+
+    const raceCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+    await docker.ensureImageExists(raceApplication, raceCommit);
+
+    // Two pollers racing to create the SAME version: the loser must detect
+    // that the winner already created exactly the container it wanted, and
+    // adopt it instead of failing.
+    const sameVersionResults = await Promise.all([
+      docker.ensureContainerRunning(raceApplication, raceCommit),
+      docker.ensureContainerRunning(raceApplication, raceCommit),
+    ]);
+    expect(sameVersionResults[0].containerId).toBe(
+      sameVersionResults[1].containerId,
+    );
+    expect(sameVersionResults.filter((r) => r.wasCreated)).toHaveLength(1);
+
+    await docker.cleanupTestCreated();
+
+    // Two pollers racing to create DIFFERENT versions: the loser must not
+    // silently adopt the winner's container, since that would leave the
+    // wrong version running while reporting success.
+    const otherCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+    await docker.ensureImageExists(raceApplication, raceCommit);
+    await docker.ensureImageExists(raceApplication, otherCommit);
+
+    const mismatchedResults = await Promise.allSettled([
+      docker.ensureContainerRunning(raceApplication, raceCommit),
+      docker.ensureContainerRunning(raceApplication, otherCommit),
+    ]);
+    expect(
+      mismatchedResults.filter((r) => r.status === "fulfilled"),
+    ).toHaveLength(1);
+    const rejected = mismatchedResults.find((r) => r.status === "rejected");
+    expect(rejected).toBeDefined();
+    expect(String((rejected as PromiseRejectedResult).reason)).toContain(
+      "already in use by container",
+    );
 
     await docker.cleanupTestCreated();
   });
