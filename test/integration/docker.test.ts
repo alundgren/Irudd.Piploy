@@ -223,6 +223,81 @@ describe("docker adapter", () => {
     await docker.cleanupTestCreated();
   });
 
+  it("keeps similarly named Application containers separate", async () => {
+    const shortApplication = {
+      Name: `${applicationName}prefix`,
+      GitRepositoryUrl: "https://example.invalid/integration.git",
+      DockerfilePath: "Dockerfile",
+      EnvironmentVariables: { VERSION: "initial" },
+    };
+    const longApplication = {
+      Name: `${shortApplication.Name}long`,
+      GitRepositoryUrl: "https://example.invalid/integration.git",
+      DockerfilePath: "Dockerfile",
+    };
+    const shortCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+    const longCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+
+    for (const { application: currentApplication, marker } of [
+      { application: shortApplication, marker: "short-name" },
+      { application: longApplication, marker: "long-name" },
+    ]) {
+      const repoDirectory = path.join(
+        settings.RootDirectory,
+        currentApplication.Name,
+        "repo",
+      );
+      await mkdir(repoDirectory, { recursive: true });
+      await writeFile(
+        path.join(repoDirectory, "Dockerfile"),
+        `FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "echo ${marker}; while true; do sleep 3600; done"]\n`,
+      );
+    }
+
+    await docker.ensureImageExists(shortApplication, shortCommit);
+    await docker.ensureImageExists(longApplication, longCommit);
+    const longStarted = await docker.ensureContainerRunning(
+      longApplication,
+      longCommit,
+    );
+    const shortStarted = await docker.ensureContainerRunning(
+      shortApplication,
+      shortCommit,
+    );
+
+    const shortRecreated = await docker.ensureContainerRunning(
+      {
+        ...shortApplication,
+        EnvironmentVariables: { VERSION: "updated" },
+      },
+      shortCommit,
+    );
+
+    expect(shortRecreated.containerId).not.toBe(shortStarted.containerId);
+    expect(
+      (await new Dockerode().getContainer(longStarted.containerId).inspect())
+        .Id,
+    ).toBe(longStarted.containerId);
+    expect(await docker.getDockerStatus(shortApplication)).toMatchObject({
+      runningContainerHash: shortCommit.hash,
+    });
+    expect(await docker.getDockerStatus(longApplication)).toMatchObject({
+      runningContainerHash: longCommit.hash,
+    });
+    await expect(
+      docker.getContainerLogs(shortApplication, 10),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("short-name"),
+    });
+    await expect(
+      docker.getContainerLogs(longApplication, 10),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("long-name"),
+    });
+
+    await docker.cleanupTestCreated();
+  });
+
   it("builds only from the selected context", async () => {
     const repoDirectory = path.join(
       settings.RootDirectory,
