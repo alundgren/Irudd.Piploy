@@ -184,6 +184,19 @@ function isContainerAlreadyStarted(error: unknown): boolean {
   );
 }
 
+function isContainerNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { reason?: string }).reason === "no such container"
+  );
+}
+
+function isContainerRemovalInProgress(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("is already in progress")
+  );
+}
+
 const containerConflictRecheckAttempts = 10;
 const containerConflictRecheckDelayMilliseconds = 150;
 
@@ -364,6 +377,30 @@ export function createDockerService(
     )[0];
   }
 
+  /**
+   * Waits for a container a concurrent poll is already removing to actually
+   * disappear, so this call does not try to create its replacement while the
+   * old name is still reserved. Gives up after the same bounded window used
+   * for the create-conflict recheck rather than waiting indefinitely; the
+   * subsequent create attempt surfaces a real failure if the name is still
+   * taken by then.
+   */
+  async function waitForContainerRemoval(containerId: string): Promise<void> {
+    for (
+      let attempt = 0;
+      attempt < containerConflictRecheckAttempts;
+      attempt++
+    ) {
+      try {
+        await docker.getContainer(containerId).inspect();
+      } catch (inspectError) {
+        if (isContainerNotFound(inspectError)) return;
+        throw inspectError;
+      }
+      await delay(containerConflictRecheckDelayMilliseconds);
+    }
+  }
+
   async function ensureImageExists(
     application: Application,
     commit: GitCommit,
@@ -482,9 +519,21 @@ export function createDockerService(
 
     if (containerPlan.existingContainerId) {
       logger.info(`Removing container ${containerName}`);
-      await docker
-        .getContainer(containerPlan.existingContainerId)
-        .remove({ force: true });
+      // A concurrent poll cycle can be removing (or have already removed)
+      // this same container, e.g. two pollers upgrading the same
+      // application at once. Neither outcome is a failure: the container is
+      // gone, or on its way out, either way.
+      try {
+        await docker
+          .getContainer(containerPlan.existingContainerId)
+          .remove({ force: true });
+      } catch (removeError) {
+        if (isContainerRemovalInProgress(removeError)) {
+          await waitForContainerRemoval(containerPlan.existingContainerId);
+        } else if (!isContainerNotFound(removeError)) {
+          throw removeError;
+        }
+      }
     }
 
     const portBindings: Record<string, Array<{ HostPort: string }>> = {};

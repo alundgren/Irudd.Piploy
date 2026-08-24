@@ -36,6 +36,7 @@ const daemonStatus: DaemonStatus = {
 function createDeps(): CommandDeps {
   return {
     requestDaemon: vi.fn(),
+    isDaemonListening: vi.fn(async () => false),
     computeStatusInline: vi.fn(async () => daemonStatus),
     pollInline: vi.fn(async () => []),
     register: vi.fn(),
@@ -300,6 +301,21 @@ describe("commands", () => {
     await poll(deps);
 
     expect(deps.pollInline).toHaveBeenCalledOnce();
+  });
+
+  it("does not become a second poller when a live daemon just did not answer in time", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => undefined);
+    deps.isDaemonListening = vi.fn(async () => true);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await poll(deps);
+
+    expect(deps.pollInline).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "Background service did not respond in time. It may be busy; try 'piploy poll' again shortly.",
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("reports a failed daemon poll request without an inline fallback", async () => {

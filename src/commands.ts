@@ -3,6 +3,7 @@ import { rmSync } from "node:fs";
 import { maxLogTailLines } from "./containerLogs.js";
 import {
   createDaemonDeps,
+  isDaemonListening,
   requestDaemon,
   startDaemon,
   type Daemon,
@@ -26,6 +27,7 @@ export type RegisterResult = DaemonResponse | undefined;
 
 export interface CommandDeps {
   requestDaemon(request: DaemonRequest): Promise<DaemonResponse | undefined>;
+  isDaemonListening(): Promise<boolean>;
   computeStatusInline(): Promise<DaemonStatus>;
   pollInline(): Promise<PollApplicationResult[]>;
   register(application: unknown): Promise<RegisterResult>;
@@ -42,6 +44,7 @@ export function createCommandDeps(
   const daemonDeps = createDaemonDeps(settings, logger);
   return {
     requestDaemon,
+    isDaemonListening,
     computeStatusInline: daemonDeps.getStatus,
     pollInline: daemonDeps.poll,
     register: (application) =>
@@ -207,6 +210,16 @@ export async function logs(
 export async function poll(deps: CommandDeps): Promise<void> {
   const response = await deps.requestDaemon({ command: "poll" });
   if (response === undefined) {
+    // An unanswered request only means "run inline" when there is no daemon
+    // to race against. A daemon that is actually listening but did not
+    // reply in time is not a green light to become a second, independent
+    // poller.
+    if (await deps.isDaemonListening()) {
+      commandFailed(
+        "Background service did not respond in time. It may be busy; try 'piploy poll' again shortly.",
+      );
+      return;
+    }
     printPollResult(await deps.pollInline());
     return;
   }

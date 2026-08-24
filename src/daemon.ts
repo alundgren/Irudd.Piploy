@@ -116,6 +116,20 @@ function getSocketPath(options: DaemonOptions): string {
   return options.socketPath ?? defaultSocketPath();
 }
 
+/**
+ * Probes whether a daemon is actually listening at the socket, as opposed to
+ * merely checking whether the socket file exists: a file can outlive a
+ * daemon that crashed or lost power, which must still fall back to
+ * reconciling inline rather than being mistaken for a live daemon that is
+ * just slow to answer. Reuses the same connect probe `removeStaleSocket`
+ * already trusts for that same distinction.
+ */
+export function isDaemonListening(
+  socketPath: string = defaultSocketPath(),
+): Promise<boolean> {
+  return canConnect(socketPath);
+}
+
 function parseRequest(value: unknown): DaemonRequest | undefined {
   if (typeof value !== "object" || value === null || !("command" in value)) {
     return undefined;

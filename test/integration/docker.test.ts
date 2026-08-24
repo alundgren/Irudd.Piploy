@@ -314,5 +314,31 @@ describe("docker adapter", () => {
     );
 
     await docker.cleanupTestCreated();
+
+    // Two pollers racing to upgrade the SAME existing container to the SAME
+    // new version: both plan "recreate" against the same
+    // existingContainerId, so one's remove() can hit the other's already
+    // completed (or in-progress) removal. Neither should surface as a
+    // failure, and both must land on the same replacement container.
+    const upgradeFromCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+    const upgradeToCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+    await docker.ensureImageExists(raceApplication, upgradeFromCommit);
+    await docker.ensureImageExists(raceApplication, upgradeToCommit);
+    const upgradeFromResult = await docker.ensureContainerRunning(
+      raceApplication,
+      upgradeFromCommit,
+    );
+    expect(upgradeFromResult.wasCreated).toBe(true);
+
+    const upgradeResults = await Promise.all([
+      docker.ensureContainerRunning(raceApplication, upgradeToCommit),
+      docker.ensureContainerRunning(raceApplication, upgradeToCommit),
+    ]);
+    expect(upgradeResults[0].containerId).toBe(upgradeResults[1].containerId);
+    expect(upgradeResults[0].containerId).not.toBe(
+      upgradeFromResult.containerId,
+    );
+
+    await docker.cleanupTestCreated();
   });
 });
