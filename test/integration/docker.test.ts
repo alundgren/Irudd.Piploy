@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -77,6 +78,22 @@ const settings: PiploySettings = {
 };
 const docker = createDockerService(settings, logger);
 
+async function getAvailableHostPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Could not allocate a host port");
+  }
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return address.port;
+}
+
 afterAll(async () => {
   await docker.cleanupTestCreated();
   await rm(temporaryDirectory, { recursive: true, force: true });
@@ -90,6 +107,65 @@ afterAll(async () => {
 });
 
 describe("docker adapter", () => {
+  it("binds every mapped port to IPv4 and IPv6 loopback only", async () => {
+    const firstHostPort = await getAvailableHostPort();
+    const secondHostPort = await getAvailableHostPort();
+    const portApplication = {
+      Name: `${applicationName}ports`,
+      GitRepositoryUrl: "https://example.invalid/integration.git",
+      DockerfilePath: "Dockerfile",
+      PortMappings: [
+        { hostPort: firstHostPort, containerPort: 8080 },
+        { hostPort: secondHostPort, containerPort: 8080 },
+      ],
+    };
+    const repoDirectory = path.join(
+      settings.RootDirectory,
+      portApplication.Name,
+      "repo",
+    );
+    await mkdir(repoDirectory, { recursive: true });
+    await writeFile(
+      path.join(repoDirectory, "Dockerfile"),
+      'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN printf \'%s\\n\' \'#!/bin/sh\' \'printf "HTTP/1.1 200 OK\\\\r\\\\nContent-Length: 14\\\\r\\\\n\\\\r\\\\nloopback-only\\\\n"\' > /response && chmod +x /response\nCMD ["nc", "-lk", "-p", "8080", "-e", "/response"]\n',
+    );
+
+    await docker.ensureImageExists(portApplication, commit);
+    const started = await docker.ensureContainerRunning(
+      portApplication,
+      commit,
+    );
+    const inspect = await new Dockerode()
+      .getContainer(started.containerId)
+      .inspect();
+    const expectedBindings = [
+      { HostIp: "127.0.0.1", HostPort: String(firstHostPort) },
+      { HostIp: "::1", HostPort: String(firstHostPort) },
+      { HostIp: "127.0.0.1", HostPort: String(secondHostPort) },
+      { HostIp: "::1", HostPort: String(secondHostPort) },
+    ];
+
+    expect(inspect.HostConfig.PortBindings?.["8080/tcp"]).toEqual(
+      expectedBindings,
+    );
+    await vi.waitFor(async () => {
+      const current = await new Dockerode()
+        .getContainer(started.containerId)
+        .inspect();
+      const effectiveBindings = current.NetworkSettings.Ports["8080/tcp"];
+      expect(effectiveBindings).toHaveLength(expectedBindings.length);
+      expect(effectiveBindings).toEqual(
+        expect.arrayContaining(expectedBindings),
+      );
+      expect(
+        await (await fetch(`http://127.0.0.1:${firstHostPort}`)).text(),
+      ).toBe("loopback-only\n");
+      expect(await (await fetch(`http://[::1]:${firstHostPort}`)).text()).toBe(
+        "loopback-only\n",
+      );
+    });
+  });
+
   it("builds, runs, reports, and cleans up a marked container", async () => {
     const repoDirectory = path.join(
       settings.RootDirectory,

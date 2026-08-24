@@ -49,7 +49,7 @@ function addRegisterOptions(command: Command): Command {
     )
     .option(
       "--port-mapping <hostPort:containerPort>",
-      "port mapping, repeatable",
+      "localhost-only port mapping on this Pi, repeatable",
       collect,
       [],
     )

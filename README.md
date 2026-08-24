@@ -96,7 +96,7 @@ reach it. Another user gets the offline fallback described under `status`.
 
 | Command         | What it does                                                                                                                                                                                                                  |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application configured host-to-container port mappings, Git, and Docker state, including the container's state, exit code, and restart count. |
+| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application localhost-only host-to-container port mappings, Git, and Docker state, including the container's state, exit code, and restart count. |
 | `logs`          | Prints one application's recent container output, running or exited. `--tail <lines>` sets how much. Requires the daemon to be running.                                                                                       |
 | `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                                                                                            |
 | `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                                                                                               |
@@ -139,6 +139,13 @@ node piploy.cjs register \
 `--port-mapping`, `--volume`, and `--env` may each be repeated. For scripting,
 `--json '<application-json>'` passes the whole application instead; it cannot be
 combined with the individual flags.
+
+Each port mapping uses `hostPort:containerPort`. Piploy binds the host port to
+localhost on the Pi, so `8080:80` is reachable there at `localhost:8080`. It
+is not directly reachable through the Pi's LAN address, Tailscale IP address,
+or public IP address. To reach an Application from another machine, configure
+Tailscale Serve or Cloudflare Tunnel on the Pi and point it at
+`localhost:<hostPort>`.
 
 `--build-context-path` optionally selects the repository-relative directory to
 send to Docker as the build context. It accepts `.` for the repository root and
