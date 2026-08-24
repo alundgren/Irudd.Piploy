@@ -64,13 +64,19 @@ the persisted form: `PortMappings` and `Volumes` remain strings in
 | `DockerfilePath` | Yes | Any string at payload validation. During a Poll it must identify a Dockerfile relative to the repository root; a path ending in `/` is rejected. Piploy trims whitespace, accepts `\\` as separators, and strips one leading `/`; examples include `Dockerfile`, `SubDirectory/Dockerfile`, and `Dockerfile.custom`. | Stored as submitted. Its parent path, not the repository root, is the Docker build context: a Dockerfile in a subdirectory can only `COPY` from that subdirectory. |
 | `PortMappings` | No | An array of strings, each exactly `<hostPort>:<containerPort>` with digits on both sides, for example `"8080:80"`. | Stored as submitted; parsed into host/container port pairs for the container. Omit it when no host port should be exposed. |
 | `Volumes` | No | An array of strings, each `<name>:/container/path`. `name` uses letters, numbers, `_`, or `-`. The container path is absolute, has at least one segment, contains neither `:` nor `..`, and cannot be `/`. Two Volumes for one Application cannot target the same container path. | Stored as submitted; parsed into a named Volume and its container path for the container. |
-| `EnvironmentVariables` | No | An object whose keys and values are strings. Values are literal: Piploy performs no interpolation. | Stored as submitted and passed to the container verbatim. Piploy has no secret store, so a credential passed this way is written to `piploy.json` in plaintext. See the production-change gate for how to keep one out of the approval record without weakening the gate. |
+| `EnvironmentVariables` | No | An object whose keys and values are strings. Values are literal except an entire `${hostEnv:NAME}` reference, where `NAME` starts with a letter or `_` and otherwise contains only letters, digits, or `_`. Other interpolation-like values remain literal. | Stored as submitted. Piploy uses a host-environment reference itself in the container identity, then resolves it when creating or recreating the container. Piploy has no secret store, so a literal credential is written to `piploy.json` in plaintext. See the production-change gate for how to keep one out of the approval record without weakening the gate. |
 
 Each named Volume resolves to a Piploy-created directory under Piploy's data
 directory, alongside its configuration, rather than under `RootDirectory`.
 Piploy owns this host location and Application data survives container
 replacement; users cannot supply a host path. Choose a Volume name for the
 data, not for a location.
+
+Piploy resolves a `${hostEnv:NAME}` reference from the daemon's environment
+only when it creates or recreates a container. It does not write the resolved
+value to ordinary diagnostics. After changing the daemon environment, restart
+the daemon and make a configuration or commit change that recreates the
+container before the new value applies.
 
 ### Generic example
 
