@@ -127,6 +127,15 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
 export async function status(deps: CommandDeps): Promise<void> {
   const response = await deps.requestDaemon({ command: "status" });
   if (response === undefined) {
+    // An unanswered request is only proof of "not running" when nothing is
+    // listening on the socket, matching how poll reads the same signal.
+    // A listening-but-slow daemon must not be reported as absent.
+    if (await deps.isDaemonListening()) {
+      console.log(`Piploy version: ${piployVersion}`);
+      console.log("Background service: busy");
+      console.log("\nIt did not respond in time. Try again shortly.");
+      return;
+    }
     printStatus(await deps.computeStatusInline(), false);
     return;
   }

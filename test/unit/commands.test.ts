@@ -164,6 +164,25 @@ describe("commands", () => {
     expect(output).toHaveBeenCalledWith("Background service: not running");
   });
 
+  it("reports a listening-but-unresponsive daemon as busy instead of not running", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => undefined);
+    deps.isDaemonListening = vi.fn(async () => true);
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(deps.isDaemonListening).toHaveBeenCalledOnce();
+    expect(deps.computeStatusInline).not.toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith("Background service: busy");
+    expect(output).toHaveBeenCalledWith(
+      "\nIt did not respond in time. Try again shortly.",
+    );
+    expect(error).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("reports a failed daemon status request without an inline fallback", async () => {
     const deps = createDeps();
     deps.requestDaemon = vi.fn(async () => ({
