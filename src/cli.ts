@@ -18,8 +18,8 @@ import {
 } from "./commands.js";
 import { defaultLogTailLines, maxLogTailLines } from "./containerLogs.js";
 import { requestDaemon } from "./daemon.js";
-import { createLogger, type Logger } from "./logger.js";
-import { loadSettings, resolveConfigPath } from "./settings.js";
+import type { Logger } from "./logger.js";
+import { resolveConfigPath } from "./settings.js";
 import { attemptSelfUpdate } from "./selfUpdate.js";
 import { piployVersion } from "./version.js";
 
@@ -84,8 +84,7 @@ const plainActions: Record<
 async function runCommand(
   run: (deps: CommandDeps) => Promise<void>,
 ): Promise<void> {
-  const settings = loadSettings(resolveConfigPath());
-  await run(createCommandDeps(settings, createLogger(settings)));
+  await run(createCommandDeps(resolveConfigPath()));
 }
 
 function defineCommand(

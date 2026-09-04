@@ -1,6 +1,11 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createCommandDeps,
   logs,
   parseRegisterOptions,
   parseTailOption,
@@ -13,7 +18,12 @@ import {
   wipeAll,
   type CommandDeps,
 } from "../../src/commands.js";
-import type { DaemonResponse, DaemonStatus } from "../../src/daemon.js";
+import {
+  startDaemon,
+  type DaemonResponse,
+  type DaemonStatus,
+} from "../../src/daemon.js";
+import type { Logger } from "../../src/logger.js";
 
 const application = {
   Name: "app",
@@ -22,6 +32,7 @@ const application = {
 };
 
 const daemonStatus: DaemonStatus = {
+  configuration: "current",
   applications: [
     {
       application: "app",
@@ -38,7 +49,7 @@ function createDeps(): CommandDeps {
     requestDaemon: vi.fn(),
     isDaemonListening: vi.fn(async () => false),
     computeStatusInline: vi.fn(async () => daemonStatus),
-    pollInline: vi.fn(async () => []),
+    pollInline: vi.fn(async () => ({ ok: true as const, applications: [] })),
     register: vi.fn(),
     wipeAll: vi.fn(),
     getPreservedApplicationDataDirectories: vi.fn(() => []),
@@ -69,8 +80,133 @@ describe("commands", () => {
     expect(deps.computeStatusInline).not.toHaveBeenCalled();
     expect(output).toHaveBeenCalledWith("Background service: running");
     expect(output).toHaveBeenCalledWith(
+      "Configuration: current piploy.json loaded by service",
+    );
+    expect(output).toHaveBeenCalledWith(
       "  Port mappings (localhost on this Pi only): 8080:80",
     );
+  });
+
+  it("reports a changed configuration and does not print an unqualified current result", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: true as const,
+      status: {
+        ...daemonStatus,
+        configuration: "restart-required" as const,
+      },
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(output).toHaveBeenCalledWith(
+      "Configuration: piploy.json differs from the service; restart the service",
+    );
+  });
+
+  it("gets stale status from a live daemon even when piploy.json is invalid", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-command-"));
+    const configPath = path.join(directory, "piploy.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        Piploy: {
+          RootDirectory: path.join(directory, "root"),
+          Applications: [],
+        },
+      }),
+    );
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      child: () => logger,
+    };
+    const daemon = await startDaemon(
+      { RootDirectory: path.join(directory, "root"), Applications: [] },
+      logger,
+      {
+        socketPath: path.join(directory, "piploy.sock"),
+        configPath,
+        pollIntervalMinutes: 60,
+        deps: {
+          poll: async () => [],
+          getStatus: async () => ({
+            applications: [daemonStatus.applications[0]!],
+          }),
+          getLogs: async () => ({
+            ok: false as const,
+            reason: "unknown-application" as const,
+          }),
+          checkGitHubRepositoryAccess: async () => ({
+            accessible: false as const,
+            reason: "transport-or-fetch-failure" as const,
+          }),
+          attemptSelfUpdate: async () => "up-to-date" as const,
+        },
+        getTailscaleAddress: () => undefined,
+      },
+    );
+    try {
+      await writeFile(configPath, "{");
+      const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await status(createCommandDeps(configPath));
+
+      expect(output).toHaveBeenCalledWith("Background service: running");
+      expect(output).toHaveBeenCalledWith(
+        "Configuration: piploy.json differs from the service; restart the service",
+      );
+      expect(output).toHaveBeenCalledWith("  Running latest version: no");
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it("does not report current inline status when piploy.json changes during the check", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-command-"));
+    const configPath = path.join(directory, "piploy.json");
+    const initialConfig = {
+      Piploy: {
+        RootDirectory: path.join(directory, "root"),
+        Applications: [],
+      },
+    };
+    await writeFile(configPath, JSON.stringify(initialConfig));
+    const deps = createCommandDeps(configPath, () => ({
+      poll: async () => [],
+      getStatus: async () => {
+        await writeFile(
+          configPath,
+          JSON.stringify({
+            Piploy: {
+              ...initialConfig.Piploy,
+              MinutesBetweenBackgroundPolls: 5,
+            },
+          }),
+        );
+        return { applications: [daemonStatus.applications[0]!] };
+      },
+      getLogs: async () => ({
+        ok: false as const,
+        reason: "unknown-application" as const,
+      }),
+      checkGitHubRepositoryAccess: async () => ({
+        accessible: false as const,
+        reason: "transport-or-fetch-failure" as const,
+      }),
+      attemptSelfUpdate: async () => "up-to-date" as const,
+    }));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await status(deps);
+
+    expect(output).toHaveBeenCalledWith(
+      "Configuration: piploy.json changed while status was running; run status again",
+    );
+    expect(output).toHaveBeenCalledWith("  Running latest version: no");
   });
 
   it("prints an explicit no-port-mappings state", async () => {
@@ -319,6 +455,7 @@ describe("commands", () => {
     const deps = createDeps();
     const response: DaemonResponse = {
       ok: true,
+      configuration: "current",
       applications: [
         {
           application: "app",
@@ -335,6 +472,9 @@ describe("commands", () => {
 
     expect(deps.requestDaemon).toHaveBeenCalledWith({ command: "poll" });
     expect(deps.pollInline).not.toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith(
+      "Poll used the current piploy.json loaded by the service.",
+    );
     expect(output).toHaveBeenCalledWith("Poll completed with failures:");
     expect(output).toHaveBeenCalledWith("  app (build): Dockerfile is invalid");
   });
@@ -347,6 +487,50 @@ describe("commands", () => {
     await poll(deps);
 
     expect(deps.pollInline).toHaveBeenCalledOnce();
+  });
+
+  it("fails an inline Poll when piploy.json changes while it runs", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-command-"));
+    const configPath = path.join(directory, "piploy.json");
+    const initialConfig = {
+      Piploy: {
+        RootDirectory: path.join(directory, "root"),
+        Applications: [],
+      },
+    };
+    await writeFile(configPath, JSON.stringify(initialConfig));
+    const deps = createCommandDeps(configPath, () => ({
+      poll: async () => {
+        await writeFile(
+          configPath,
+          JSON.stringify({
+            Piploy: {
+              ...initialConfig.Piploy,
+              MinutesBetweenBackgroundPolls: 5,
+            },
+          }),
+        );
+        return [];
+      },
+      getStatus: async () => ({ applications: [] }),
+      getLogs: async () => ({
+        ok: false as const,
+        reason: "unknown-application" as const,
+      }),
+      checkGitHubRepositoryAccess: async () => ({
+        accessible: false as const,
+        reason: "transport-or-fetch-failure" as const,
+      }),
+      attemptSelfUpdate: async () => "up-to-date" as const,
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await poll(deps);
+
+    expect(error).toHaveBeenCalledWith(
+      "piploy.json changed while the Poll was running. Run the command again.",
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("does not become a second poller when a live daemon just did not answer in time", async () => {
@@ -376,6 +560,25 @@ describe("commands", () => {
 
     expect(deps.pollInline).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith("Daemon poll request failed: failed");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints the daemon's restart instruction when configuration changed", async () => {
+    const deps = createDeps();
+    deps.requestDaemon = vi.fn(async () => ({
+      ok: false as const,
+      reason: "configuration-changed" as const,
+      message:
+        "piploy.json differs from the configuration loaded by the service. Restart the service before continuing.",
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await poll(deps);
+
+    expect(error).toHaveBeenCalledWith(
+      "piploy.json differs from the configuration loaded by the service. Restart the service before continuing.",
+    );
+    expect(deps.pollInline).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 

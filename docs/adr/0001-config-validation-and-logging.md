@@ -50,6 +50,14 @@ Application data must survive it (see
 The daemon reads and validates configuration once at startup. Restart Piploy
 after changing `piploy.json`.
 
+The daemon records a one-way revision of the exact configuration file it read.
+`status` compares that revision with the current file. When they differ, status
+reports that a restart is required and never reports an Application as running
+the latest version. A Poll also checks the revision before and after doing work.
+It refuses to start when the file already differs, and reports a failed Poll if
+the file changes while the Poll is running. The revision and diagnostic never
+contain configuration values.
+
 The one exception is `register`, which adds a single Application. It validates
 the payload, rejects a duplicate `Name`, re-validates the whole resulting
 configuration, writes `piploy.json` through a temporary file and a rename, and
@@ -58,6 +66,12 @@ deploys it without a restart (see
 [ADR-0007](0007-live-config-mutation-for-register.md)). Every other change to
 `piploy.json` — editing or removing an Application, `RootDirectory`,
 `MinutesBetweenBackgroundPolls` — still requires a restart.
+
+`register` compares the exact file it reads with the daemon's loaded revision.
+If they differ, it refuses the request. After writing, it calculates the next
+revision from the same serialized bytes and advances the live Applications and
+revision together. It never re-reads the file and assigns that later content to
+the in-memory settings.
 
 Piploy uses pino for level filtering and contextual child loggers. It writes
 human-readable text lines in the form `timestamp [key=value, ...] message`;

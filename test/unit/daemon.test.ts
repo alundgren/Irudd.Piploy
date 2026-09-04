@@ -19,7 +19,11 @@ import {
 } from "../../src/daemon.js";
 import type { Logger } from "../../src/logger.js";
 import { GitOperationError } from "../../src/git.js";
-import { loadSettings, type PiploySettings } from "../../src/settings.js";
+import {
+  loadConfiguration,
+  loadSettings,
+  type PiploySettings,
+} from "../../src/settings.js";
 
 const settings: PiploySettings = {
   RootDirectory: "/tmp/piploy",
@@ -157,6 +161,7 @@ describe("daemon", () => {
     ).resolves.toEqual({
       ok: true,
       status: {
+        configuration: "current",
         applications: [
           {
             application: "app",
@@ -168,6 +173,162 @@ describe("daemon", () => {
         ],
       },
     });
+  });
+
+  it("marks status stale and refuses to poll after piploy.json changes", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-"));
+    const configPath = path.join(directory, "piploy.json");
+    const socketPath = path.join(directory, "piploy.sock");
+    const config = (environmentValue: string) => ({
+      Piploy: {
+        RootDirectory: path.join(directory, "root"),
+        Applications: [
+          {
+            Name: "app",
+            GitRepositoryUrl: "https://example.com/app.git",
+            DockerfilePath: "Dockerfile",
+            EnvironmentVariables: { VALUE: environmentValue },
+          },
+        ],
+      },
+    });
+    await writeFile(configPath, JSON.stringify(config("initial")));
+    const loaded = loadConfiguration(configPath);
+    let polls = 0;
+    const deps = completeDeps({
+      getLogs: noLogs,
+      poll: async () => {
+        polls += 1;
+        return [];
+      },
+      getStatus: async () => ({
+        applications: [
+          {
+            application: "app",
+            portMappings: [],
+            git: null,
+            docker: {},
+            isRunningLatestVersion: true,
+          },
+        ],
+      }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+    const daemon = await startDaemon(loaded.settings, createLogger(), {
+      socketPath,
+      configPath,
+      loadedConfigurationRevision: loaded.revision,
+      pollIntervalMinutes: 60,
+      deps,
+      ...noTailscale,
+    });
+    daemons.push(daemon);
+    await vi.waitFor(() => expect(polls).toBe(1));
+
+    const secret = "must-not-appear";
+    await writeFile(configPath, JSON.stringify(config(secret)));
+
+    const statusResponse = await requestDaemon(
+      { command: "status" },
+      daemon.socketPath,
+    );
+    expect(statusResponse).toMatchObject({
+      ok: true,
+      status: {
+        configuration: "restart-required",
+        applications: [{ isRunningLatestVersion: false }],
+      },
+    });
+    const pollResponse = await requestDaemon(
+      { command: "poll" },
+      daemon.socketPath,
+    );
+    expect(pollResponse).toEqual({
+      ok: false,
+      reason: "configuration-changed",
+      message:
+        "piploy.json differs from the configuration loaded by the service. Restart the service before continuing.",
+    });
+    expect(polls).toBe(1);
+    expect(JSON.stringify({ statusResponse, pollResponse })).not.toContain(
+      secret,
+    );
+
+    await daemon.stop();
+    daemons.splice(daemons.indexOf(daemon), 1);
+    const reloaded = loadConfiguration(configPath);
+    expect(reloaded.settings.Applications[0]?.EnvironmentVariables).toEqual({
+      VALUE: secret,
+    });
+    const restartedDaemon = await startDaemon(
+      reloaded.settings,
+      createLogger(),
+      {
+        socketPath,
+        configPath,
+        loadedConfigurationRevision: reloaded.revision,
+        pollIntervalMinutes: 60,
+        deps,
+        ...noTailscale,
+      },
+    );
+    daemons.push(restartedDaemon);
+    await vi.waitFor(() => expect(polls).toBe(2));
+    await expect(
+      requestDaemon({ command: "poll" }, restartedDaemon.socketPath),
+    ).resolves.toEqual({
+      ok: true,
+      applications: [],
+      configuration: "current",
+    });
+    expect(polls).toBe(3);
+  });
+
+  it("keeps the loaded revision when piploy.json changes before daemon startup", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-"));
+    const configPath = path.join(directory, "piploy.json");
+    const initialConfig = {
+      Piploy: {
+        RootDirectory: path.join(directory, "root"),
+        Applications: [],
+      },
+    };
+    await writeFile(configPath, JSON.stringify(initialConfig));
+    const loaded = loadConfiguration(configPath);
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...initialConfig,
+        Piploy: { ...initialConfig.Piploy, MinutesBetweenBackgroundPolls: 5 },
+      }),
+    );
+    let polls = 0;
+    const daemon = await startDaemon(loaded.settings, createLogger(), {
+      socketPath: path.join(directory, "piploy.sock"),
+      configPath,
+      loadedConfigurationRevision: loaded.revision,
+      pollIntervalMinutes: 60,
+      deps: completeDeps({
+        getLogs: noLogs,
+        poll: async () => {
+          polls += 1;
+          return [];
+        },
+        getStatus: async () => ({ applications: [] }),
+        attemptSelfUpdate: async () => "up-to-date",
+      }),
+      ...noTailscale,
+    });
+    daemons.push(daemon);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await expect(
+      requestDaemon({ command: "status" }, daemon.socketPath),
+    ).resolves.toEqual({
+      ok: true,
+      status: { applications: [], configuration: "restart-required" },
+    });
+    expect(polls).toBe(0);
   });
 
   it("returns container logs for one application over the private socket", async () => {
@@ -323,7 +484,11 @@ describe("daemon", () => {
 
     await expect(
       requestDaemon({ command: "poll" }, daemon.socketPath),
-    ).resolves.toEqual({ ok: true, applications });
+    ).resolves.toEqual({
+      ok: true,
+      applications,
+      configuration: "current",
+    });
   });
 
   it("runs poll requests serially and rejects a client when its queue is full", async () => {
@@ -358,8 +523,16 @@ describe("daemon", () => {
     });
 
     releaseFirstPoll!();
-    await expect(first).resolves.toEqual({ ok: true, applications: [] });
-    await expect(second).resolves.toEqual({ ok: true, applications: [] });
+    await expect(first).resolves.toEqual({
+      ok: true,
+      applications: [],
+      configuration: "current",
+    });
+    await expect(second).resolves.toEqual({
+      ok: true,
+      applications: [],
+      configuration: "current",
+    });
     expect(polls).toBe(3);
   });
 
@@ -391,7 +564,11 @@ describe("daemon", () => {
     ).resolves.toEqual({ ok: false, reason: "poll-in-progress" });
 
     releasePoll!();
-    await expect(poll).resolves.toEqual({ ok: true, applications: [] });
+    await expect(poll).resolves.toEqual({
+      ok: true,
+      applications: [],
+      configuration: "current",
+    });
   });
 
   it("rejects malformed requests", async () => {
@@ -579,6 +756,23 @@ describe("daemon", () => {
       };
       expect(written.Piploy.Applications).toEqual([newApplication]);
       expect(liveSettings.Applications.map((one) => one.Name)).toEqual(["app"]);
+
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          Piploy: {
+            RootDirectory: path.dirname(configPath),
+            Applications: [newApplication],
+            MinutesBetweenBackgroundPolls: 5,
+          },
+        }),
+      );
+      await expect(
+        sendRequest(daemon.socketPath, { command: "status" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        status: { configuration: "restart-required" },
+      });
     });
 
     it("rejects an application the schema does not accept", async () => {
@@ -752,7 +946,10 @@ describe("daemon", () => {
       await expect(isListening(mcpPort)).resolves.toBe(false);
       await expect(
         sendRequest(daemon.socketPath, { command: "status" }),
-      ).resolves.toEqual({ ok: true, status: { applications: [] } });
+      ).resolves.toEqual({
+        ok: true,
+        status: { applications: [], configuration: "current" },
+      });
       expect(messages).toContain(
         "warn No Tailscale address found. MCP server not started",
       );

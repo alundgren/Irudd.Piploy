@@ -22,6 +22,8 @@ import {
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
 import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
 import {
+  ConfigurationChangedError,
+  readConfigurationRevision,
   registerApplication,
   RegisterApplicationError,
   resolveConfigPath,
@@ -35,6 +37,8 @@ import { isRunningLatestVersion } from "./status.js";
 const defaultQueueCapacity = 1000;
 const defaultPollIntervalMinutes = 60;
 const socketProbeTimeoutMilliseconds = 750;
+export const configurationChangedMessage =
+  "piploy.json differs from the configuration loaded by the service. Restart the service before continuing.";
 
 export type DaemonRequest =
   | { command: "status" }
@@ -46,7 +50,11 @@ export type DaemonRequest =
 
 export type DaemonResponse =
   | { ok: true; status: DaemonStatus }
-  | { ok: true; applications: PollApplicationResult[] }
+  | {
+      ok: true;
+      applications: PollApplicationResult[];
+      configuration: "current";
+    }
   | { ok: true; application: Application }
   | { ok: true; logs: ApplicationLogs }
   | { ok: true; repositoryAccess: GitHubRepositoryAccessResult }
@@ -57,9 +65,11 @@ export type DaemonResponse =
         | "busy"
         | "invalid-request"
         | "failed"
+        | "configuration-changed"
         | "poll-in-progress"
         | "unknown-application"
         | "no-container";
+      message?: string;
     }
   | { ok: false; reason: RegisterApplicationFailure; message: string };
 
@@ -88,6 +98,11 @@ export interface ApplicationDaemonStatus {
 }
 
 export interface DaemonStatus {
+  applications: ApplicationDaemonStatus[];
+  configuration: "current" | "restart-required" | "changed-during-command";
+}
+
+interface ApplicationStatusSnapshot {
   applications: ApplicationDaemonStatus[];
 }
 
@@ -127,7 +142,7 @@ export async function getApplicationStatus(
 
 export interface DaemonDeps {
   poll(): Promise<PollApplicationResult[]>;
-  getStatus(): Promise<DaemonStatus>;
+  getStatus(): Promise<ApplicationStatusSnapshot>;
   getLogs(application: string, tail?: number): Promise<ApplicationLogsResult>;
   checkGitHubRepositoryAccess(
     repository: string,
@@ -138,6 +153,7 @@ export interface DaemonDeps {
 export interface DaemonOptions {
   socketPath?: string;
   configPath?: string;
+  loadedConfigurationRevision?: string;
   queueCapacity?: number;
   pollIntervalMinutes?: number;
   deps?: DaemonDeps;
@@ -387,6 +403,9 @@ export async function startDaemon(
 
   const configPath = options.configPath ?? resolveConfigPath();
   const deps = options.deps ?? createDaemonDeps(settings, logger);
+  let loadedConfigurationRevision =
+    options.loadedConfigurationRevision ??
+    readConfigurationRevision(configPath);
   const queue: QueuedRequest[] = [];
   const sockets = new Set<net.Socket>();
   let workerRunning = false;
@@ -394,6 +413,18 @@ export async function startDaemon(
   let pollInProgress = false;
   let shutdownPromise: Promise<void> | undefined;
   let mcpServer: McpServerHandle | undefined;
+
+  function isConfigurationCurrent(): boolean {
+    return (
+      readConfigurationRevision(configPath) === loadedConfigurationRevision
+    );
+  }
+
+  function configurationChangedResponse(): DaemonResponse {
+    const message = configurationChangedMessage;
+    logger.warn(message);
+    return { ok: false, reason: "configuration-changed", message };
+  }
 
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
@@ -417,12 +448,22 @@ export async function startDaemon(
    * only trigger, and nothing pushes work to it.
    */
   function runRegister(rawApplication: unknown): DaemonResponse {
+    if (!isConfigurationCurrent()) return configurationChangedResponse();
     try {
-      const application = registerApplication(configPath, rawApplication);
+      const registered = registerApplication(
+        configPath,
+        rawApplication,
+        loadedConfigurationRevision ?? "",
+      );
+      const { application } = registered;
       settings.Applications.push(application);
+      loadedConfigurationRevision = registered.revision;
       logger.info(`Registered application ${application.Name}`);
       return { ok: true, application };
     } catch (error) {
+      if (error instanceof ConfigurationChangedError) {
+        return configurationChangedResponse();
+      }
       if (!(error instanceof RegisterApplicationError)) throw error;
       logger.warn(`Rejected register request. ${error.message}`);
       return { ok: false, reason: error.reason, message: error.message };
@@ -434,8 +475,25 @@ export async function startDaemon(
       // Every command is matched explicitly: a fallthrough here would run
       // something other than what the client asked for.
       switch (request.command) {
-        case "status":
-          return { ok: true, status: await deps.getStatus() };
+        case "status": {
+          const status = await deps.getStatus();
+          const configuration = isConfigurationCurrent()
+            ? "current"
+            : "restart-required";
+          return {
+            ok: true,
+            status: {
+              configuration,
+              applications:
+                configuration === "current"
+                  ? status.applications
+                  : status.applications.map((application) => ({
+                      ...application,
+                      isRunningLatestVersion: false,
+                    })),
+            },
+          };
+        }
         case "logs": {
           const result = await deps.getLogs(request.application, request.tail);
           return result.ok
@@ -454,9 +512,16 @@ export async function startDaemon(
         case "register":
           return runRegister(request.application);
         case "poll":
+          if (!isConfigurationCurrent()) {
+            return configurationChangedResponse();
+          }
           pollInProgress = true;
           try {
-            return { ok: true, applications: await deps.poll() };
+            const applications = await deps.poll();
+            if (!isConfigurationCurrent()) {
+              return configurationChangedResponse();
+            }
+            return { ok: true, applications, configuration: "current" };
           } finally {
             pollInProgress = false;
           }
