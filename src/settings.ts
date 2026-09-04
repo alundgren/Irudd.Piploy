@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   readFileSync,
   renameSync,
@@ -127,16 +128,40 @@ export type PortMapping = { hostPort: number; containerPort: number };
 export type Volume = { name: string; containerPath: string };
 export type Application = z.infer<typeof ApplicationSchema>;
 export type PiploySettings = z.infer<typeof PiploySettingsSchema>;
+export interface LoadedConfiguration {
+  settings: PiploySettings;
+  revision: string;
+}
 
 export function parseSettings(json: unknown): PiploySettings {
   return ConfigFileSchema.parse(json).Piploy;
 }
 
-export function loadSettings(configPath: string): PiploySettings {
+export function calculateConfigurationRevision(raw: string | Buffer): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+export function readConfigurationRevision(configPath: string): string | null {
+  try {
+    return calculateConfigurationRevision(readFileSync(configPath));
+  } catch {
+    return null;
+  }
+}
+
+/** Reads once so the revision identifies the exact bytes that produced the settings. */
+export function loadConfiguration(configPath: string): LoadedConfiguration {
   const raw = readFileSync(configPath, "utf8");
   const settings = parseSettings(JSON.parse(raw));
   assertDataDirectoryIsSeparateFromRootDirectory(settings, configPath);
-  return settings;
+  return {
+    settings,
+    revision: calculateConfigurationRevision(raw),
+  };
+}
+
+export function loadSettings(configPath: string): PiploySettings {
+  return loadConfiguration(configPath).settings;
 }
 
 export type RegisterApplicationFailure =
@@ -150,6 +175,13 @@ export class RegisterApplicationError extends Error {
   ) {
     super(message);
     this.name = "RegisterApplicationError";
+  }
+}
+
+export class ConfigurationChangedError extends Error {
+  constructor() {
+    super("piploy.json differs from the configuration loaded by the service");
+    this.name = "ConfigurationChangedError";
   }
 }
 
@@ -188,10 +220,15 @@ export function parseApplication(rawApplication: unknown): Application {
 export function registerApplication(
   configPath: string,
   rawApplication: unknown,
-): Application {
+  expectedRevision: string,
+): { application: Application; revision: string } {
   const application = parseApplication(rawApplication);
 
-  const currentConfig = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+  const currentRaw = readFileSync(configPath, "utf8");
+  if (calculateConfigurationRevision(currentRaw) !== expectedRevision) {
+    throw new ConfigurationChangedError();
+  }
+  const currentConfig = JSON.parse(currentRaw) as unknown;
   // An invalid file here is a broken installation, not a bad request, so it
   // propagates rather than becoming a register-specific rejection.
   const currentSettings = parseSettings(currentConfig);
@@ -227,8 +264,12 @@ export function registerApplication(
     );
   }
 
-  writeConfigAtomically(configPath, nextConfig);
-  return application;
+  const nextRaw = JSON.stringify(nextConfig, null, 2) + "\n";
+  writeConfigAtomically(configPath, nextRaw);
+  return {
+    application,
+    revision: calculateConfigurationRevision(nextRaw),
+  };
 }
 
 /**
@@ -236,10 +277,13 @@ export function registerApplication(
  * mid-write leaves the previous `piploy.json` intact rather than a truncated
  * one the daemon would refuse to start from.
  */
-function writeConfigAtomically(configPath: string, config: unknown): void {
+function writeConfigAtomically(
+  configPath: string,
+  serializedConfig: string,
+): void {
   const temporaryPath = `${configPath}.tmp-${process.pid.toString()}`;
   try {
-    writeFileSync(temporaryPath, JSON.stringify(config, null, 2) + "\n", {
+    writeFileSync(temporaryPath, serializedConfig, {
       // Keep whatever the operator set on the existing file: a rename replaces
       // the inode, so the mode has to be carried over explicitly.
       mode: statSync(configPath).mode & 0o777,

@@ -85,7 +85,7 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "status",
     {
       description:
-        "Report each registered application's configured localhost-only host-to-container port mappings on this Pi (an empty array means none), git commits, Docker image and container hashes, whether it runs the latest version, and its container's state, exit code, and restart count. A 'restarting' state with a non-zero exit code means the container is crash-looping. `git: null` with `gitError` means the fetch failed; without `gitError`, the repository has not been cloned.",
+        "Report whether the daemon loaded the current piploy.json, plus each registered application's configured localhost-only host-to-container port mappings on this Pi (an empty array means none), git commits, Docker image and container hashes, whether it runs the latest version, and its container's state, exit code, and restart count. A changed configuration requires a daemon restart and makes every latest-version result false. A 'restarting' state with a non-zero exit code means the container is crash-looping. `git: null` with `gitError` means the fetch failed; without `gitError`, the repository has not been cloned.",
     },
     async () => toolResult(await dispatch({ command: "status" })),
   );
@@ -107,7 +107,7 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "poll",
     {
       description:
-        "Run one reconciliation pass now: fetch each application's repository, rebuild, and restart what is out of date.",
+        "Run one reconciliation pass now using the current piploy.json loaded by the daemon: fetch each application's repository, rebuild, and restart what is out of date. If piploy.json changed after daemon startup, the Poll fails and requires a daemon restart.",
     },
     async () => toolResult(await dispatch({ command: "poll" })),
   );

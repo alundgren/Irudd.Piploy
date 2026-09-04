@@ -96,9 +96,9 @@ reach it. Another user gets the offline fallback described under `status`.
 
 | Command         | What it does                                                                                                                                                                                                                  |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`        | Prints the Piploy version, whether the background service is reachable, and per-application localhost-only host-to-container port mappings, Git, and Docker state, including the container's state, exit code, and restart count. |
+| `status`        | Prints whether the service loaded the current `piploy.json`, plus per-Application port mappings, Git state, Docker state, exit code, and restart count.                                                                             |
 | `logs`          | Prints one application's recent container output, running or exited. `--tail <lines>` sets how much. Requires the daemon to be running.                                                                                       |
-| `poll`          | Runs one reconciliation now instead of waiting for the poll timer.                                                                                                                                                            |
+| `poll`          | Runs one Poll now. If `piploy.json` changed after service startup, it stops and asks for a service restart.                                                                                                                    |
 | `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                                                                                               |
 | `service-stop`  | Asks the running daemon to shut down.                                                                                                                                                                                         |
 | `register`      | Adds one application to `piploy.json` and to the running daemon, so the next poll deploys it without a restart. Requires the daemon to be running.                                                                            |
@@ -112,6 +112,16 @@ reach it. Another user gets the offline fallback described under `status`.
 ```bash
 node piploy.cjs status
 ```
+
+The service reads `piploy.json` at startup. After editing the file, `status`
+reports that a restart is required and does not report any Application as
+running the latest version. `poll` also refuses to run until the service has
+restarted. This recovery message remains available when the edited file is
+invalid, since `status` and `poll` contact the running service before trying to
+load the file themselves. A successful manual Poll says whether it used the
+current file directly or the copy loaded by the service. `register` remains the
+exception: it updates both the file and the running service, so it does not
+require a restart.
 
 ### `logs`
 

@@ -6,15 +6,18 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ConfigurationChangedError,
   getApplicationDataDirectory,
   getApplicationRepoDirectory,
   getApplicationRootDirectory,
   getDataDirectory,
   getVolumeDirectory,
+  loadConfiguration,
   loadSettings,
   parseHostEnvironmentReference,
   parseSettings,
   registerApplication,
+  readConfigurationRevision,
   resolveBundleDirectory,
   resolveConfigPath,
 } from "../../src/settings.js";
@@ -296,12 +299,59 @@ describe("parseSettings", () => {
       EnvironmentVariables: { TOKEN: "${hostEnv:CONTAINER_TOKEN}" },
     };
 
-    registerApplication(configPath, rawApplication);
+    const loaded = loadConfiguration(configPath);
+    registerApplication(configPath, rawApplication, loaded.revision);
 
     const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
       Piploy: { Applications: unknown[] };
     };
     expect(persisted.Piploy.Applications).toEqual([rawApplication]);
+  });
+
+  it("rejects registration when the file no longer matches the loaded revision", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-settings-"));
+    const configPath = path.join(directory, "piploy.json");
+    const initial = {
+      Piploy: { RootDirectory: "/root", Applications: [] as unknown[] },
+    };
+    await writeFile(configPath, JSON.stringify(initial));
+    const loaded = loadConfiguration(configPath);
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        Piploy: {
+          ...initial.Piploy,
+          MinutesBetweenBackgroundPolls: 5,
+        },
+      }),
+    );
+
+    expect(() =>
+      registerApplication(configPath, validApplication, loaded.revision),
+    ).toThrow(ConfigurationChangedError);
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
+      Piploy: { Applications: unknown[] };
+    };
+    expect(persisted.Piploy.Applications).toEqual([]);
+  });
+
+  it("returns the revision of the exact bytes written by registration", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-settings-"));
+    const configPath = path.join(directory, "piploy.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({ Piploy: { RootDirectory: "/root", Applications: [] } }),
+    );
+    const loaded = loadConfiguration(configPath);
+
+    const registered = registerApplication(
+      configPath,
+      validApplication,
+      loaded.revision,
+    );
+
+    expect(registered.application).toEqual(validApplication);
+    expect(registered.revision).toBe(readConfigurationRevision(configPath));
   });
 
   it.each(["", "/outside", "../outside", "services/../../outside"])(

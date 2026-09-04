@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import path from "node:path";
 
 import { maxLogTailLines } from "./containerLogs.js";
 import {
@@ -12,24 +13,29 @@ import {
   type DaemonStatus,
 } from "./daemon.js";
 import { createDockerService } from "./docker.js";
-import type { Logger } from "./logger.js";
+import { createLogger } from "./logger.js";
 import type { PollApplicationResult } from "./orchestrator.js";
-import type { PiploySettings } from "./settings.js";
 import {
   getApplicationDataDirectory,
+  loadConfiguration,
   parseApplication,
+  readConfigurationRevision,
   RegisterApplicationError,
+  resolveConfigPath,
 } from "./settings.js";
 import { piployVersion } from "./version.js";
 
 /** A daemon register response, or `undefined` when no daemon answered. */
 export type RegisterResult = DaemonResponse | undefined;
+export type InlinePollResult =
+  | { ok: true; applications: PollApplicationResult[] }
+  | { ok: false; message: string };
 
 export interface CommandDeps {
   requestDaemon(request: DaemonRequest): Promise<DaemonResponse | undefined>;
   isDaemonListening(): Promise<boolean>;
   computeStatusInline(): Promise<DaemonStatus>;
-  pollInline(): Promise<PollApplicationResult[]>;
+  pollInline(): Promise<InlinePollResult>;
   register(application: unknown): Promise<RegisterResult>;
   wipeAll(): Promise<void>;
   getPreservedApplicationDataDirectories(): string[];
@@ -38,18 +44,79 @@ export interface CommandDeps {
 
 /** Wires CLI commands to the one real daemon, orchestration, and Docker adapters. */
 export function createCommandDeps(
-  settings: PiploySettings,
-  logger: Logger,
+  configPath: string = resolveConfigPath(),
+  createDeps: typeof createDaemonDeps = createDaemonDeps,
 ): CommandDeps {
-  const daemonDeps = createDaemonDeps(settings, logger);
+  let context:
+    | {
+        settings: ReturnType<typeof loadConfiguration>["settings"];
+        revision: string;
+        logger: ReturnType<typeof createLogger>;
+        daemonDeps: ReturnType<typeof createDaemonDeps>;
+      }
+    | undefined;
+
+  function loadContext() {
+    if (context !== undefined) return context;
+    const { settings, revision } = loadConfiguration(configPath);
+    const logger = createLogger(settings);
+    context = {
+      settings,
+      revision,
+      logger,
+      daemonDeps: createDeps(settings, logger),
+    };
+    return context;
+  }
+
+  function configurationIsCurrent(revision: string): boolean {
+    return readConfigurationRevision(configPath) === revision;
+  }
+
+  const socketPath = path.join(path.dirname(configPath), "piploy.sock");
   return {
-    requestDaemon,
-    isDaemonListening,
-    computeStatusInline: daemonDeps.getStatus,
-    pollInline: daemonDeps.poll,
+    requestDaemon: (request) => requestDaemon(request, socketPath),
+    isDaemonListening: () => isDaemonListening(socketPath),
+    computeStatusInline: async () => {
+      const { daemonDeps, revision } = loadContext();
+      const status = await daemonDeps.getStatus();
+      const configuration = configurationIsCurrent(revision)
+        ? "current"
+        : "changed-during-command";
+      return {
+        configuration,
+        applications:
+          configuration === "current"
+            ? status.applications
+            : status.applications.map((application) => ({
+                ...application,
+                isRunningLatestVersion: false,
+              })),
+      };
+    },
+    pollInline: async () => {
+      const { daemonDeps, revision } = loadContext();
+      if (!configurationIsCurrent(revision)) {
+        return {
+          ok: false,
+          message:
+            "piploy.json changed before the Poll started. Run the command again.",
+        };
+      }
+      const applications = await daemonDeps.poll();
+      if (!configurationIsCurrent(revision)) {
+        return {
+          ok: false,
+          message:
+            "piploy.json changed while the Poll was running. Run the command again.",
+        };
+      }
+      return { ok: true, applications };
+    },
     register: (application) =>
-      requestDaemon({ command: "register", application }),
+      requestDaemon({ command: "register", application }, socketPath),
     async wipeAll() {
+      const { settings, logger } = loadContext();
       try {
         await createDockerService(settings, logger).cleanupAll();
       } finally {
@@ -57,10 +124,18 @@ export function createCommandDeps(
       }
     },
     getPreservedApplicationDataDirectories: () =>
-      settings.Applications.filter(
-        (application) => (application.Volumes?.length ?? 0) > 0,
-      ).map(getApplicationDataDirectory),
-    startDaemon: () => startDaemon(settings, logger),
+      loadContext()
+        .settings.Applications.filter(
+          (application) => (application.Volumes?.length ?? 0) > 0,
+        )
+        .map(getApplicationDataDirectory),
+    startDaemon: () => {
+      const { settings, logger, revision } = loadContext();
+      return startDaemon(settings, logger, {
+        configPath,
+        loadedConfigurationRevision: revision,
+      });
+    },
   };
 }
 
@@ -78,6 +153,13 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
   console.log(`Piploy version: ${piployVersion}`);
   console.log(
     `Background service: ${daemonReachable ? "running" : "not running"}`,
+  );
+  console.log(
+    status.configuration === "current"
+      ? `Configuration: current piploy.json${daemonReachable ? " loaded by service" : ""}`
+      : status.configuration === "restart-required"
+        ? "Configuration: piploy.json differs from the service; restart the service"
+        : "Configuration: piploy.json changed while status was running; run status again",
   );
   for (const application of status.applications) {
     console.log(`\n${application.application}`);
@@ -242,21 +324,36 @@ export async function poll(deps: CommandDeps): Promise<void> {
       );
       return;
     }
-    printPollResult(await deps.pollInline());
+    const inlineResult = await deps.pollInline();
+    if (!inlineResult.ok) {
+      commandFailed(inlineResult.message);
+      return;
+    }
+    printPollResult(inlineResult.applications);
     return;
   }
   if (!response.ok) {
-    commandFailed(`Daemon poll request failed: ${response.reason}`);
+    commandFailed(
+      response.message ?? `Daemon poll request failed: ${response.reason}`,
+    );
     return;
   }
   if ("applications" in response) {
-    printPollResult(response.applications);
+    printPollResult(response.applications, true);
     return;
   }
   console.log("Poll completed.");
 }
 
-function printPollResult(applications: PollApplicationResult[]): void {
+function printPollResult(
+  applications: PollApplicationResult[],
+  usedCurrentDaemonConfiguration = false,
+): void {
+  if (usedCurrentDaemonConfiguration) {
+    console.log("Poll used the current piploy.json loaded by the service.");
+  } else {
+    console.log("Poll used the current piploy.json directly.");
+  }
   const failures = applications.filter((application) => !application.ok);
   if (failures.length === 0) {
     console.log("Poll completed.");
