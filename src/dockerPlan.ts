@@ -340,6 +340,7 @@ function validateExternalReference(
     });
   } else if (
     normalized?.startsWith("docker.io/library/") ||
+    /^ghcr\.io\/.+@sha256:[a-f\d]{64}$/i.test(reference) ||
     /^mcr\.microsoft\.com\/dotnet\/.+@sha256:[a-f\d]{64}$/i.test(reference)
   ) {
     return;
@@ -347,7 +348,7 @@ function validateExternalReference(
     violations.push({
       reference,
       reason:
-        "must be a Docker Official Image or mcr.microsoft.com/dotnet image",
+        "must be a Docker Official Image, ghcr.io image, or mcr.microsoft.com/dotnet image",
     });
   }
 }

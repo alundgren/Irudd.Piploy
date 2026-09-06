@@ -18,12 +18,15 @@ pnpm audit report alongside the bundled daemon.
 Before calling Docker to build an application image, Piploy validates the
 resolved Dockerfile text. Every external `FROM` and `COPY --from` reference
 must be pinned to a SHA-256 digest and be either a Docker Official Image
-(`docker.io/library/*`, including short names) or a Microsoft .NET image
-(`mcr.microsoft.com/dotnet/*`). Piploy supports running .NET applications,
-so the Microsoft .NET namespace is an explicit application-image allowlist.
-`scratch` and earlier Docker build stages are not external references and
-remain valid. The validator collects every violation and prevents Docker from
-being called when one is found.
+(`docker.io/library/*`, including short names), a GitHub Container Registry
+image (`ghcr.io/*`), or a Microsoft .NET image
+(`mcr.microsoft.com/dotnet/*`). GitHub Container Registry is allowed so
+applications can use project-owned build images while retaining immutable
+image references. Piploy supports running .NET applications, so the Microsoft
+.NET namespace remains an explicit application-image allowlist. `scratch` and
+earlier Docker build stages are not external references and remain valid. The
+validator collects every violation and prevents Docker from being called when
+one is found.
 
 ## Consequences
 
@@ -34,5 +37,6 @@ quarantine.
 
 Application Dockerfiles must update base-image digests in reviewed commits.
 Piploy never advances a digest automatically. The policy establishes image
-identity and allowlisted publishers; it does not sandbox Dockerfile build
-commands or verify image signatures/provenance.
+identity and limits registries, but any publisher can create a repository on
+GitHub Container Registry. It does not sandbox Dockerfile build commands or
+verify image signatures or provenance.

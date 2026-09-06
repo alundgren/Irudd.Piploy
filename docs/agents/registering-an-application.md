@@ -48,10 +48,10 @@ Before proposing a change, inspect the application repository and confirm:
 
 Also read the Dockerfile's `FROM` and external `COPY --from` references.
 Piploy accepts only SHA-256-digest-pinned Docker Official Images
-(`docker.io/library/*`, including short names) and Microsoft .NET images
-(`mcr.microsoft.com/dotnet/*`). `scratch` and earlier build stages are valid;
-other external references are rejected. Piploy does not advance image digests
-for the Application.
+(`docker.io/library/*`, including short names), GitHub Container Registry images
+(`ghcr.io/*`), and Microsoft .NET images (`mcr.microsoft.com/dotnet/*`).
+`scratch` and earlier build stages are valid; other external references are
+rejected. Piploy does not advance image digests for the Application.
 
 ## Application payload reference
 
