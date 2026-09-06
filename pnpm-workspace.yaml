@@ -5,6 +5,8 @@ allowBuilds:
   protobufjs: false
   ssh2: false
 minimumReleaseAge: 11520
+minimumReleaseAgeExclude:
+  - qs@6.16.0
 minimumReleaseAgeStrict: true
 minimumReleaseAgeIgnoreMissingTime: false
 trustPolicy: no-downgrade
@@ -12,3 +14,5 @@ trustLockfile: false
 blockExoticSubdeps: true
 overrides:
   chokidar: 5.0.0
+  fast-uri@: 3.1.6
+  qs@: 6.16.0
