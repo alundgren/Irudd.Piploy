@@ -389,12 +389,13 @@ describe("getBuildContextPathFromSetting", () => {
 });
 
 describe("validateDockerfileImageReferences", () => {
-  it("accepts digest-pinned official and Microsoft .NET images", () => {
+  it("accepts digest-pinned images from allowed registries", () => {
     expect(
       validateDockerfileImageReferences(`
         FROM --platform=linux/arm64 node:current-slim@sha256:${digest} AS build
         FROM library/nginx:latest@sha256:${digest}
         FROM docker.io/library/alpine@sha256:${digest}
+        FROM ghcr.io/voidzero-dev/vite-plus:0.3.0@sha256:${digest}
         FROM mcr.microsoft.com/dotnet/core/sdk:3.1@sha256:${digest}
       `),
     ).toEqual([]);
@@ -426,7 +427,8 @@ describe("validateDockerfileImageReferences", () => {
         ARG NODE_IMAGE=node:latest
         FROM node:latest
         COPY --from=docker.io/someone/tool@sha256:${digest} /tool /tool
-        FROM ghcr.io/example/image@sha256:${digest}
+        FROM ghcr.io/example/image:latest
+        FROM quay.io/example/image@sha256:${digest}
         FROM \${NODE_IMAGE}
       `),
     ).toEqual([
@@ -437,12 +439,16 @@ describe("validateDockerfileImageReferences", () => {
       {
         reference: `docker.io/someone/tool@sha256:${digest}`,
         reason:
-          "must be a Docker Official Image or mcr.microsoft.com/dotnet image",
+          "must be a Docker Official Image, ghcr.io image, or mcr.microsoft.com/dotnet image",
       },
       {
-        reference: `ghcr.io/example/image@sha256:${digest}`,
+        reference: "ghcr.io/example/image:latest",
+        reason: "must be pinned with an @sha256 digest",
+      },
+      {
+        reference: `quay.io/example/image@sha256:${digest}`,
         reason:
-          "must be a Docker Official Image or mcr.microsoft.com/dotnet image",
+          "must be a Docker Official Image, ghcr.io image, or mcr.microsoft.com/dotnet image",
       },
       {
         reference: "${NODE_IMAGE}",
