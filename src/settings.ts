@@ -118,6 +118,28 @@ const PiploySettingsSchema = z.object({
   Applications: z.array(ApplicationSchema),
   GitHubOwnerCredentials: GitHubOwnerCredentialsSchema.optional(),
   IsTestRun: z.boolean().optional(),
+  Buildx: z
+    .object({
+      Enabled: z.boolean().default(false),
+      CacheRetentionHours: z
+        .number()
+        .min(1 / 3600)
+        .max(876000)
+        .default(720),
+      CacheTargetBytes: z
+        .number()
+        .int()
+        .positive()
+        .safe()
+        .default(8 * 1024 ** 3),
+      MinimumFreeBytes: z
+        .number()
+        .int()
+        .positive()
+        .safe()
+        .default(5 * 1024 ** 3),
+    })
+    .optional(),
 });
 
 const ConfigFileSchema = z.object({

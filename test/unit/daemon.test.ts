@@ -412,7 +412,10 @@ describe("daemon", () => {
           "piploy.sock",
         ),
         pollIntervalMinutes: 60,
-        deps: createDaemonDeps(accessSettings, logger),
+        deps: {
+          ...createDaemonDeps(accessSettings, logger),
+          poll: async () => [],
+        },
         ...noTailscale,
       });
       daemons.push(daemon);
@@ -983,6 +986,28 @@ describe("daemon", () => {
 
       expect(events).toEqual(["poll", "poll"]);
     });
+  });
+
+  it("cancels and awaits an active Poll when the daemon stops", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    let completed = false;
+    const daemon = await start({
+      getLogs: noLogs,
+      poll: async (signal) => {
+        receivedSignal = signal;
+        await new Promise<void>((resolve) =>
+          signal!.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        completed = true;
+        return [];
+      },
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+    await vi.waitFor(() => expect(receivedSignal).toBeDefined());
+    await daemon.stop();
+    expect(receivedSignal!.aborted).toBe(true);
+    expect(completed).toBe(true);
   });
 
   describe("isDaemonListening", () => {

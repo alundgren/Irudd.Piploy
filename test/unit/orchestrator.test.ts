@@ -1,3 +1,4 @@
+import { BuildPostponedError } from "../../src/buildx.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -217,4 +218,38 @@ describe("orchestrator", () => {
       { application: "second", ok: true },
     ]);
   });
+});
+
+it("retries a postponed build on the next Poll without starting a replacement early", async () => {
+  const deps = createDeps();
+  deps.ensureImageExists = vi
+    .fn()
+    .mockRejectedValueOnce(new BuildPostponedError("low storage"))
+    .mockResolvedValue(undefined);
+  const orchestrator = createOrchestrator(
+    { ...settings, Applications: [applications[0]!] },
+    createLogger(),
+    deps,
+  );
+  expect(await orchestrator.poll()).toMatchObject([
+    { ok: false, stage: "build", code: "buildPostponed" },
+  ]);
+  expect(deps.ensureContainerRunning).not.toHaveBeenCalled();
+  expect(await orchestrator.poll()).toMatchObject([{ ok: true }]);
+  expect(deps.ensureContainerRunning).toHaveBeenCalledTimes(1);
+});
+
+it("passes cancellation to builds and skips replacement and cleanup after shutdown", async () => {
+  const deps = createDeps();
+  const controller = new AbortController();
+  deps.ensureImageExists = vi.fn(async (_application, _commit, signal) => {
+    expect(signal).toBe(controller.signal);
+    controller.abort();
+  });
+  await createOrchestrator(settings, createLogger(), deps).poll(
+    controller.signal,
+  );
+  expect(deps.ensureImageExists).toHaveBeenCalledTimes(1);
+  expect(deps.ensureContainerRunning).not.toHaveBeenCalled();
+  expect(deps.cleanupInactive).not.toHaveBeenCalled();
 });

@@ -279,3 +279,12 @@ will remain in systemd's restart loop until it is rolled back manually.
 ## TODO
 
 - Git commit hook + minimal web server on the Pi to receive the hook so Piploy does not have to poll.
+
+## Optional Buildx builds
+
+Buildx is disabled by default, including after automatic bundle updates.
+See the [Buildx rollout and recovery runbook](docs/buildx-rollout.md) before
+activation. It covers supported versions, explicit setup, cache retention,
+Docker storage checks, verified image recovery archives, and rollback with
+automatic updates paused. Production activation is a separately approved
+operation.

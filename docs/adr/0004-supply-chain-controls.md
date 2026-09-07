@@ -40,3 +40,11 @@ Piploy never advances a digest automatically. The policy establishes image
 identity and limits registries, but any publisher can create a repository on
 GitHub Container Registry. It does not sandbox Dockerfile build commands or
 verify image signatures or provenance.
+
+## BuildKit infrastructure image
+
+Piploy's opt-in Buildx adapter may use the single upstream
+`docker.io/moby/buildkit` image pinned by digest in `src/buildx.ts`. This is a
+narrow exception for the builder and its read-only filesystem measurement
+container. It does not expand the Application Dockerfile allowlist. Changes
+to the digest require a reviewed commit and ARM64 manifest verification.

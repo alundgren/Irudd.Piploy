@@ -48,3 +48,10 @@ containers on a developer machine out of test cleanup.
 Unit tests focus on deterministic policy and sequencing. Integration tests
 cover behavior whose correctness depends on Git or Docker rather than on a
 substitute implementation.
+
+`buildx.ts` owns the opt-in Docker CLI builder operations. `docker.ts` retains
+Dockerfile validation, context creation, image identity, container operations,
+and Application-image cleanup. Builder state is separate from Application
+images. Normal cleanup preserves every image referenced by a container and
+never invokes a global prune. A successful build does not imply successful
+container replacement.
