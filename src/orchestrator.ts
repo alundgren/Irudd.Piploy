@@ -1,3 +1,4 @@
+import { BuildPostponedError } from "./buildx.js";
 import { createDockerService, PortAlreadyInUseError } from "./docker.js";
 import {
   ensureLocalRepository,
@@ -14,6 +15,7 @@ export interface OrchestratorDeps {
   ensureImageExists(
     application: Application,
     commit: { hash: string },
+    signal?: AbortSignal,
   ): Promise<void>;
   ensureContainerRunning(
     application: Application,
@@ -23,7 +25,7 @@ export interface OrchestratorDeps {
 }
 
 export interface Orchestrator {
-  poll(): Promise<PollApplicationResult[]>;
+  poll(signal?: AbortSignal): Promise<PollApplicationResult[]>;
 }
 
 export type PollApplicationResult =
@@ -33,7 +35,7 @@ export type PollApplicationResult =
       ok: false;
       stage: PollFailureStage;
       message: string;
-      code?: "portAlreadyInUse";
+      code?: "portAlreadyInUse" | "buildPostponed";
       gitError?: GitDiagnostic;
     };
 
@@ -58,8 +60,8 @@ export function createOrchestratorDeps(
     ensureLocalRepository: (application) =>
       ensureLocalRepository(settings, application, logger),
     getLatestCommit: (application) => getLatestCommit(settings, application),
-    async ensureImageExists(application, commit) {
-      await docker.ensureImageExists(application, commit);
+    async ensureImageExists(application, commit, signal) {
+      await docker.ensureImageExists(application, commit, signal);
     },
     async ensureContainerRunning(application, commit) {
       await docker.ensureContainerRunning(application, commit);
@@ -73,13 +75,14 @@ export function createOrchestrator(
   logger: Logger,
   deps: OrchestratorDeps = createOrchestratorDeps(settings, logger),
 ): Orchestrator {
-  async function poll(): Promise<PollApplicationResult[]> {
+  async function poll(signal?: AbortSignal): Promise<PollApplicationResult[]> {
     const pollLogger = logger.child({ operation: "poll" });
     pollLogger.info("Polling applications");
     const results: PollApplicationResult[] = [];
 
     try {
       for (const application of settings.Applications) {
+        if (signal?.aborted) break;
         const applicationLogger = pollLogger.child({
           application: application.Name,
         });
@@ -90,7 +93,9 @@ export function createOrchestrator(
           await deps.ensureLocalRepository(application);
           const commit = await deps.getLatestCommit(application);
           stage = "build";
-          await deps.ensureImageExists(application, commit);
+          signal?.throwIfAborted();
+          await deps.ensureImageExists(application, commit, signal);
+          signal?.throwIfAborted();
           stage = "start";
           await deps.ensureContainerRunning(application, commit);
           results.push({ application: application.Name, ok: true });
@@ -104,7 +109,8 @@ export function createOrchestrator(
             stage,
             message: gitError?.message ?? errorMessage(error),
             ...(gitError === undefined ? {} : { gitError }),
-            ...(error instanceof PortAlreadyInUseError
+            ...(error instanceof PortAlreadyInUseError ||
+            error instanceof BuildPostponedError
               ? { code: error.code }
               : {}),
           });
@@ -112,7 +118,7 @@ export function createOrchestrator(
       }
     } finally {
       pollLogger.info("Cleaning up unused images");
-      await deps.cleanupInactive(settings.Applications);
+      if (!signal?.aborted) await deps.cleanupInactive(settings.Applications);
     }
 
     return results;

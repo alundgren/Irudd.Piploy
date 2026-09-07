@@ -40,3 +40,10 @@ directory derived next to `piploy.json` — the same rule that already locates
 - Files in a Volume are owned by whatever user the container runs as. An
   Application whose Dockerfile sets no `USER` writes root-owned files that the
   service user cannot read without `sudo`.
+
+The opt-in Buildx adapter has one infrastructure exception to the mount rule:
+a short-lived read-only measurement container binds the verified Engine storage
+directory to measure its free space, including when the Engine is remote.
+This never changes Application mounts or grants Application Dockerfiles access
+to those directories. Its Docker cache volume and private builder metadata
+survive `wipeall`; Application data remains untouched.

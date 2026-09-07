@@ -253,10 +253,14 @@ describe("docker adapter", () => {
       wasStarted: true,
       containerId: started.containerId,
     });
+    const replacementCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
+    const replacementImage = await docker.ensureImageExists(
+      application,
+      replacementCommit,
+    );
+    expect(replacementImage.imageId).not.toBe(built.imageId);
     await expect(
-      docker.ensureContainerRunning(application, {
-        hash: crypto.randomUUID().replaceAll("-", ""),
-      }),
+      docker.ensureContainerRunning(application, replacementCommit),
     ).rejects.toThrow(
       `Host environment variable '${hostEnvironmentName}' is not set`,
     );
@@ -264,6 +268,14 @@ describe("docker adapter", () => {
       .getContainer(started.containerId)
       .inspect();
     expect(afterFailedRecreation.Id).toBe(started.containerId);
+    await docker.cleanupInactive(settings.Applications);
+    expect(
+      (await new Dockerode().getContainer(started.containerId).inspect()).State
+        .Running,
+    ).toBe(true);
+    expect((await new Dockerode().getImage(built.imageId).inspect()).Id).toBe(
+      built.imageId,
+    );
     expect(loggedMessages.join("\n")).not.toContain(hostEnvironmentSecret);
     expect(
       JSON.stringify(await docker.getDockerStatus(application)),

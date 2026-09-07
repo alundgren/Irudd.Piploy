@@ -141,7 +141,7 @@ export async function getApplicationStatus(
 }
 
 export interface DaemonDeps {
-  poll(): Promise<PollApplicationResult[]>;
+  poll(signal?: AbortSignal): Promise<PollApplicationResult[]>;
   getStatus(): Promise<ApplicationStatusSnapshot>;
   getLogs(application: string, tail?: number): Promise<ApplicationLogsResult>;
   checkGitHubRepositoryAccess(
@@ -258,7 +258,7 @@ export function createDaemonDeps(
   }
 
   return {
-    poll: () => orchestrator.poll(),
+    poll: (signal) => orchestrator.poll(signal),
     getStatus: async () => ({
       applications: await Promise.all(
         settings.Applications.map((application) =>
@@ -411,6 +411,8 @@ export async function startDaemon(
   let workerRunning = false;
   let stopping = false;
   let pollInProgress = false;
+  const pollCancellation = new AbortController();
+  let activePoll: Promise<PollApplicationResult[]> | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let mcpServer: McpServerHandle | undefined;
 
@@ -429,9 +431,22 @@ export async function startDaemon(
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     stopping = true;
+    pollCancellation.abort();
     clearInterval(timer);
     for (const socket of sockets) socket.destroy();
     shutdownPromise = Promise.all([
+      activePoll === undefined
+        ? undefined
+        : new Promise<void>((resolve) => {
+            // Git transport is not cancellable; shutdown still has a finite bound.
+            const timeout = setTimeout(resolve, 6000);
+            void activePoll!
+              .catch((error: unknown) => logError(logger, error))
+              .finally(() => {
+                clearTimeout(timeout);
+                resolve();
+              });
+          }),
       close(server),
       // A stuck MCP server must not hold up the shutdown a client just asked
       // for, and must not be what fails it. The socket teardown is the one
@@ -517,13 +532,15 @@ export async function startDaemon(
           }
           pollInProgress = true;
           try {
-            const applications = await deps.poll();
+            activePoll = deps.poll(pollCancellation.signal);
+            const applications = await activePoll;
             if (!isConfigurationCurrent()) {
               return configurationChangedResponse();
             }
             return { ok: true, applications, configuration: "current" };
           } finally {
             pollInProgress = false;
+            activePoll = undefined;
           }
       }
     } catch (error) {

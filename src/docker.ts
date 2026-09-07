@@ -12,6 +12,7 @@ import DockerIgnore from "@balena/dockerignore";
 import Dockerode from "dockerode";
 import { pack } from "tar-fs";
 
+import { createBuildx } from "./buildx.js";
 import { decodeContainerLog, limitLogBytes } from "./containerLogs.js";
 import {
   containerLogConfig,
@@ -82,6 +83,7 @@ export interface PiployDockerService {
   ensureImageExists(
     application: Application,
     commit: GitCommit,
+    signal?: AbortSignal,
   ): Promise<EnsureImageResult>;
   ensureContainerRunning(
     application: Application,
@@ -402,6 +404,9 @@ export function createDockerService(
   logger: Logger,
 ): PiployDockerService {
   const docker = new Dockerode();
+  const buildx = settings.Buildx?.Enabled
+    ? createBuildx(settings, docker, logger)
+    : undefined;
 
   async function findImage(
     reference: string,
@@ -448,6 +453,7 @@ export function createDockerService(
   async function ensureImageExists(
     application: Application,
     commit: GitCommit,
+    signal?: AbortSignal,
   ): Promise<EnsureImageResult> {
     const commitTag = getImageVersionTagCommit(application.Name, commit);
     const existingImage = await findImage(commitTag);
@@ -473,32 +479,53 @@ export function createDockerService(
 
     const uniqueId = crypto.randomUUID();
     logger.info(`Building docker image for commit ${commit.hash}`);
-    const buildStream = await buildImage(
-      docker,
-      createBuildContext(buildPaths),
-      {
-        dockerfile: buildPaths.dockerfilePath,
-        t: [
-          getImageVersionTagLatest(application.Name),
-          commitTag,
-          getImageVersionTagUniqueId(application.Name, uniqueId),
-        ],
-        labels: {
-          [`${piploy}_buildDate`]: new Date().toISOString(),
-          [imageAppLabelName]: application.Name,
-          [imageCommitLabelName]: commit.hash,
-          [`${piploy}_uniqueId`]: uniqueId,
-          ...(settings.IsTestRun ? { [testMarkerLabelName]: "true" } : {}),
-        },
+    const started = Date.now();
+    const options: PiployImageBuildOptions = {
+      dockerfile: buildPaths.dockerfilePath,
+      t: [
+        getImageVersionTagLatest(application.Name),
+        commitTag,
+        getImageVersionTagUniqueId(application.Name, uniqueId),
+      ],
+      labels: {
+        [`${piploy}_buildDate`]: new Date().toISOString(),
+        [imageAppLabelName]: application.Name,
+        [imageCommitLabelName]: commit.hash,
+        [`${piploy}_uniqueId`]: uniqueId,
+        ...(settings.IsTestRun ? { [testMarkerLabelName]: "true" } : {}),
       },
-    );
-    await followBuildProgress(docker, buildStream, logger);
-    logger.info(`Built docker image for commit ${commit.hash}`);
+    };
+    try {
+      if (buildx) {
+        await buildx.build(
+          createBuildContext(buildPaths),
+          buildPaths.dockerfilePath,
+          options.t,
+          options.labels!,
+          signal,
+        );
+      } else {
+        const buildStream = await buildImage(
+          docker,
+          createBuildContext(buildPaths),
+          options,
+        );
+        await followBuildProgress(docker, buildStream, logger);
+      }
+    } catch (error) {
+      logger.warn(
+        `Image build did not complete; duration=${Date.now() - started}ms; current Application retained`,
+      );
+      throw error;
+    }
 
     const builtImage = await findImage(commitTag);
     if (!builtImage) {
       throw new Error(`Failed to create image for ${application.Name}`);
     }
+    logger.info(
+      `Built docker image for commit ${commit.hash}; duration=${Date.now() - started}ms`,
+    );
     return { wasCreated: true, imageId: builtImage.Id };
   }
 
@@ -748,6 +775,8 @@ export function createDockerService(
   ): Promise<Dockerode.ImageInfo[]> {
     const labelFilters = [imageAppLabelName];
     if (additionalLabel) labelFilters.push(additionalLabel);
+    else if (settings.IsTestRun)
+      labelFilters.push(`${testMarkerLabelName}=true`);
     return (
       await docker.listImages({
         all: true,
@@ -773,19 +802,58 @@ export function createDockerService(
     for (const image of images) {
       await docker.getImage(image.Id).remove({ force: true });
     }
-    await docker.pruneImages({ filters: { dangling: ["true"] } });
   }
 
   async function cleanupInactive(applications: Application[]): Promise<void> {
+    const declaredNames = new Set(
+      applications.map((application) => application.Name),
+    );
+    const containers = await docker.listContainers({ all: true });
+    for (const container of containers) {
+      const appName = container.Labels[imageAppLabelName];
+      if (
+        appName &&
+        !declaredNames.has(appName) &&
+        (container.Labels[testMarkerLabelName] === "true") ===
+          (settings.IsTestRun === true)
+      ) {
+        await docker.getContainer(container.Id).remove({ force: true });
+      }
+    }
+    // References protect a serving image even after its latest tag moves to a
+    // replacement whose container cannot be created.
+    const referencedImages = new Set(
+      (await docker.listContainers({ all: true })).map(
+        (container) => container.ImageID,
+      ),
+    );
     const latestTags = new Set(
       applications.map((application) =>
         getImageVersionTagLatest(application.Name),
       ),
     );
-    const inactiveImages = (await getPiployImages()).filter(
-      (image) => !image.RepoTags?.some((tag) => latestTags.has(tag)),
-    );
-    await stopContainersAndDeleteImages(inactiveImages);
+    for (const image of await getPiployImages()) {
+      if (
+        (image.Labels[testMarkerLabelName] === "true") !==
+        (settings.IsTestRun === true)
+      )
+        continue;
+      if (
+        referencedImages.has(image.Id) ||
+        image.RepoTags?.some((tag) => latestTags.has(tag))
+      )
+        continue;
+      await docker.getImage(image.Id).remove({ force: true });
+    }
+    if (buildx) {
+      try {
+        await buildx.cleanup();
+      } catch (error) {
+        logger.warn(
+          `Buildx cache cleanup postponed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   async function cleanupAll(): Promise<void> {
