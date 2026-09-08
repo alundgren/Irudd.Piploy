@@ -25,6 +25,7 @@ These steps install Piploy on a new Pi. They assume the service user is
    Place `piploy.json` at `/home/irudd/Piploy/piploy.json`. Piploy resolves
    configuration relative to the bundle, rather than the current working
    directory. Set `PIPLOY_CONFIG` to use a configuration file elsewhere.
+   Complete [Buildx setup](#buildx-setup) before starting the service.
 
 3. Download the current release bundle:
 
@@ -76,6 +77,76 @@ These steps install Piploy on a new Pi. They assume the service user is
    ```bash
    sudo systemctl daemon-reload && sudo systemctl restart piploy
    ```
+
+## Buildx setup
+
+Install Linux Docker Engine and CLI 29 or newer and Buildx 0.36 or newer on
+the Pi. Follow Docker's [Debian installation instructions](https://docs.docker.com/engine/install/debian/)
+for the host OS. The Piploy service account must be able to access the Docker
+Engine and run the Docker CLI. Check as that account:
+
+```bash
+docker version
+docker buildx version
+docker info --format '{{.DockerRootDir}}'
+```
+
+Check free space on the filesystem containing the reported Docker storage
+directory. Allow room for the builder image, Application images, and cache,
+in addition to the 5 GiB minimum free-space threshold.
+
+Add these settings inside the `Piploy` object in `piploy.json` before starting
+the service:
+
+```json
+"Buildx": {
+  "Enabled": true,
+  "CacheRetentionHours": 720,
+  "CacheTargetBytes": 8589934592,
+  "MinimumFreeBytes": 5368709120
+}
+```
+
+Start the service using the bootstrap instructions above. Configuration changes
+require a restart. On its first Poll, Piploy creates a dedicated
+`docker-container` builder and persistent cache volume. It downloads BuildKit
+0.32.0 using the ARM64/AMD64 image digest pinned in `src/buildx.ts` and starts a
+privileged builder container. No manual builder creation is needed. Piploy
+selects the same Engine for builds and Application containers, without changing
+the operator's default builder or Docker context.
+
+### Verify builds and cache
+
+Read `journalctl -u piploy --no-pager` for the effective Buildx settings,
+Dockerfile progress, `CACHED` steps, build duration, and cleanup results. A
+successful build loads its image into the Engine before container replacement.
+Measure replacement separately; parallel build-step durations overlap.
+
+Builder metadata lives in `.piploy-buildx/normal` next to `piploy.json`. Set
+`BUILDX_CONFIG` to that directory and use the daemon's Docker endpoint when
+running `docker buildx ls`, `docker buildx inspect <name>`, or
+`docker buildx du --builder <name>`. The builder name starts with `piploy-`.
+Inspect its running node for BuildKit 0.32.0 and exactly one GC policy matching
+the configured retention, cache target, and minimum free space, with zero
+reserved space. Cache and metadata survive daemon restarts.
+
+Automatic GC and Poll cleanup protect cache used within the last 720 hours,
+with no broader fallback policy. Eligible old cache is reclaimed least recently
+used first. The 8 GiB target is soft; protected cache can exceed it. Running an
+Application does not refresh its build cache's last-use time. Changed Dockerfile
+inputs can invalidate cached layers even when those layers remain stored.
+
+If storage cannot be measured or remains below the minimum after eligible
+cleanup, Piploy postpones new builds until a later Poll. Existing-image reuse
+and running Applications continue. The threshold does not guarantee that an
+arbitrary build will fit. Build and export failures do not trigger replacement.
+
+Piploy verifies the builder's Engine, pinned image, ownership markers, and cache
+volume before reuse. Do not relabel or remove a resource just because its name
+matches. Retention changes recreate a verified owned builder while preserving
+its cache. If a builder container exists without metadata, restore its matching
+metadata before retrying. Application-image cleanup is separate from build-cache
+cleanup; `wipeall` does not remove the dedicated builder, metadata, or cache.
 
 ## Running CLI commands
 
@@ -279,12 +350,3 @@ will remain in systemd's restart loop until it is rolled back manually.
 ## TODO
 
 - Git commit hook + minimal web server on the Pi to receive the hook so Piploy does not have to poll.
-
-## Optional Buildx builds
-
-Buildx is disabled by default, including after automatic bundle updates.
-See the [Buildx rollout and recovery runbook](docs/buildx-rollout.md) before
-activation. It covers supported versions, explicit setup, cache retention,
-Docker storage checks, verified image recovery archives, and rollback with
-automatic updates paused. Production activation is a separately approved
-operation.

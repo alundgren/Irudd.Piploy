@@ -148,7 +148,7 @@ export function createBuildx(
         else if (code !== 0 || inputError)
           reject(
             new Error(
-              `Buildx ${args.slice(0, args[0] === "buildx" ? 2 : 1).join(" ")} operation failed (exit ${String(code)}). ${options.progress ? "Check timestamped build progress for Dockerfile, export, or disk errors." : args[0] === "run" ? "Docker storage measurement failed; check Engine storage access and capacity." : "Check Docker CLI/Buildx prerequisites and the owned builder using docs/buildx-rollout.md."}`,
+              `Buildx ${args.slice(0, args[0] === "buildx" ? 2 : 1).join(" ")} operation failed (exit ${String(code)}). ${options.progress ? "Check timestamped build progress for Dockerfile, export, or disk errors." : args[0] === "run" ? "Docker storage measurement failed; check Engine storage access and capacity." : "Check Docker CLI/Buildx prerequisites and the owned builder using README.md#buildx-setup."}`,
             ),
           );
         else resolve(output);
@@ -197,7 +197,7 @@ export function createBuildx(
       !(Number(buildxMatch[1]) > 0 || Number(buildxMatch[2]) >= 36)
     ) {
       throw new Error(
-        "Buildx requires Docker Engine/CLI 29 or newer and Buildx 0.36 or newer. Install compatible versions before activation.",
+        "Buildx requires Docker Engine/CLI 29 or newer and Buildx 0.36 or newer. Install compatible versions before using Buildx.",
       );
     }
     if (info.OSType !== "linux")
@@ -218,7 +218,7 @@ export function createBuildx(
       !container.Config.Env?.includes(`PIPLOY_BUILDER_POLICY=${expectedPolicy}`)
     ) {
       throw new Error(
-        "Piploy builder ownership or retention configuration differs. Follow the runbook to inspect and recreate the owned builder with cache preserved.",
+        "Piploy builder ownership or retention configuration differs. See README.md#buildx-setup to inspect and recreate the owned builder with cache preserved.",
       );
     }
   }
@@ -240,7 +240,7 @@ export function createBuildx(
         Object.keys(volume.Options ?? {}).length !== 0)
     ) {
       throw new Error(
-        "An unidentified Piploy cache volume already exists. Inspect its ownership using the runbook; Piploy will not adopt it.",
+        "An unidentified Piploy cache volume already exists. Inspect its ownership using README.md#buildx-setup; Piploy will not adopt it.",
       );
     }
     if (exists && !volume)
@@ -267,7 +267,7 @@ export function createBuildx(
         !/^[a-f0-9]{64}$/.test(previousPolicy)
       ) {
         throw new Error(
-          "Piploy builder ownership or Engine differs. Inspect it using the runbook before making changes.",
+          "Piploy builder ownership or Engine differs. Inspect it using README.md#buildx-setup before making changes.",
         );
       }
       if (exists) await verifyContainer(previousPolicy);
@@ -347,7 +347,7 @@ export function createBuildx(
       policies[0].reservedSpace !== 0
     ) {
       throw new Error(
-        "Piploy BuildKit version or effective GC policy differs; stop the owned builder and restore the runbook configuration",
+        "Piploy BuildKit version or effective GC policy differs; stop the owned builder and restore the expected retention configuration",
       );
     }
   }

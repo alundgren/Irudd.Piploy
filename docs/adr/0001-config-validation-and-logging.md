@@ -96,7 +96,7 @@ a restart. Defaults protect cache used in the last 720 hours, target 8 GiB of
 cache, and require 5 GiB free before a new build. A storage postponement is a
 build-stage Poll result with code `buildPostponed`; a later Poll retries it.
 Existing-image reuse precedes builder and storage checks. See the
-[Buildx rollout runbook](../buildx-rollout.md).
+[Buildx setup](../../README.md#buildx-setup).
 
 Opt-in Buildx progress uses timestamped info-level lines so operators can see
 Dockerfile execution and cache reuse with the normal installed logger. Legacy
