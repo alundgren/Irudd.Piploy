@@ -350,3 +350,25 @@ will remain in systemd's restart loop until it is rolled back manually.
 ## TODO
 
 - Git commit hook + minimal web server on the Pi to receive the hook so Piploy does not have to poll.
+
+## Image reuse and upgrades
+
+Piploy identifies a build by a versioned hash of the configured repository URL,
+exact Git commit, normalized Dockerfile path, and effective build context.
+Omitting `BuildContextPath` still uses the Dockerfile's parent directory.
+Equivalent normalized paths reuse the same image. Runtime settings such as
+ports, Volumes, and environment variables do not change build identity.
+
+Each Poll selects an image with matching build metadata and passes its exact
+Docker image ID to container creation. Container reuse and concurrent-create
+adoption require that ID as well as the commit and runtime configuration.
+Compatibility tags remain available, but a commit tag alone cannot establish
+image reuse. Both Dockerode and opt-in Buildx follow this contract.
+
+The first Poll after upgrading may rebuild legacy images that lack build
+identity metadata and briefly interrupt Applications during normal container
+replacement. No configuration migration is required. A failed or postponed
+build leaves the current container running. Cleanup protects images referenced
+by containers, including after a replacement build moves the latest tag.
+Downgrading restores the older Bundle's incomplete reuse behavior and does
+not retain this fix.

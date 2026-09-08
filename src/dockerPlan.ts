@@ -3,10 +3,12 @@ import path from "node:path";
 
 export interface DockerImage {
   id: string;
+  buildIdentity?: string;
 }
 
 export interface DockerContainer {
   id: string;
+  imageId: string;
   state: string;
   gitTipCommit?: string;
   configHash?: string;
@@ -74,8 +76,36 @@ export const containerRestartPolicy = { Name: "unless-stopped" } as const;
 /** Every published application port stays reachable only from this Pi. */
 export const containerPortBindingHostIps = ["127.0.0.1", "::1"] as const;
 
-export function planImage(existingImage?: DockerImage): ImagePlan {
-  return existingImage
+export function getBuildIdentity(
+  repository: string,
+  commit: string,
+  dockerfileSetting: string,
+  contextSetting?: string,
+): string {
+  const dockerfile = getDockerfilePathFromSetting(dockerfileSetting);
+  const identity = {
+    version: 1,
+    repository,
+    commit,
+    dockerfile: path.posix.join(
+      dockerfile.contextDirectory,
+      dockerfile.dockerfileName,
+    ),
+    context:
+      contextSetting === undefined
+        ? path.posix
+            .normalize(dockerfile.contextDirectory || ".")
+            .replace(/\/$/, "")
+        : getBuildContextPathFromSetting(contextSetting).replace(/\/$/, ""),
+  };
+  return `v1_${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
+}
+
+export function planImage(
+  existingImage: DockerImage | undefined,
+  buildIdentity: string,
+): ImagePlan {
+  return existingImage?.buildIdentity === buildIdentity
     ? { action: "reuse", imageId: existingImage.id }
     : { action: "build" };
 }
@@ -84,6 +114,7 @@ export function planContainer(
   existingContainer: DockerContainer | undefined,
   gitTipCommit: string,
   configHash: string,
+  imageId: string,
 ): ContainerPlan {
   if (!existingContainer) {
     return { action: "recreate" };
@@ -91,7 +122,8 @@ export function planContainer(
 
   if (
     existingContainer.gitTipCommit === gitTipCommit &&
-    existingContainer.configHash === configHash
+    existingContainer.configHash === configHash &&
+    existingContainer.imageId === imageId
   ) {
     if (
       existingContainer.state === "running" ||
@@ -112,20 +144,22 @@ export function planContainer(
  * name-conflict create failure. Unlike planContainer, an unusable state here
  * does not mean "recreate": the caller has already lost the create race, so
  * removing this container would only invite another conflict. A container
- * whose labels match the requested commit and config is exactly the one this
- * call wanted, and is started (a race winner is not yet running the instant
- * after Docker registers its name) unless it already is. A mismatch, or no
+ * whose image ID and labels match the requested image, commit and config is
+ * the one this call wanted. A race winner may not be running yet, so it is
+ * started unless already running. A mismatch, or no
  * container at all, means the name conflict was real, not benign.
  */
 export function planRacedContainer(
   existingContainer: DockerContainer | undefined,
   gitTipCommit: string,
   configHash: string,
+  imageId: string,
 ): RacedContainerPlan {
   if (
     !existingContainer ||
     existingContainer.gitTipCommit !== gitTipCommit ||
-    existingContainer.configHash !== configHash
+    existingContainer.configHash !== configHash ||
+    existingContainer.imageId !== imageId
   ) {
     return { action: "fail" };
   }

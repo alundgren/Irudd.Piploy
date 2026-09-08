@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getContainerConfigHash,
+  getBuildIdentity,
   getBuildContextPathFromSetting,
   getDockerfilePathFromSetting,
   planContainer,
@@ -17,14 +18,19 @@ const digest = "a".repeat(64);
 
 describe("planImage", () => {
   it("reuses an image already built for the commit", () => {
-    expect(planImage({ id: "sha256:existing" })).toEqual({
+    expect(
+      planImage(
+        { id: "sha256:existing", buildIdentity: "v1_expected" },
+        "v1_expected",
+      ),
+    ).toEqual({
       action: "reuse",
       imageId: "sha256:existing",
     });
   });
 
   it("builds when the commit image does not exist", () => {
-    expect(planImage()).toEqual({ action: "build" });
+    expect(planImage(undefined, "v1_expected")).toEqual({ action: "build" });
   });
 });
 
@@ -34,17 +40,29 @@ describe("planContainer", () => {
   it.each([
     [undefined, { action: "recreate" }],
     [
-      { id: "container", state: "running", gitTipCommit: "other" },
+      {
+        id: "container",
+        imageId: "sha256:selected",
+        state: "running",
+        gitTipCommit: "other",
+      },
       { action: "recreate", existingContainerId: "container" },
     ],
     [
-      { id: "container", state: "created", gitTipCommit: "commit" },
+      {
+        id: "container",
+        imageId: "sha256:selected",
+        state: "created",
+        gitTipCommit: "commit",
+      },
       { action: "recreate", existingContainerId: "container" },
     ],
   ] as const)(
     "recreates when the current container is not usable",
     (container, expected) => {
-      expect(planContainer(container, "commit", configHash)).toEqual(expected);
+      expect(
+        planContainer(container, "commit", configHash, "sha256:selected"),
+      ).toEqual(expected);
     },
   );
 
@@ -53,12 +71,14 @@ describe("planContainer", () => {
       planContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "running",
           gitTipCommit: "commit",
           configHash,
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "reuse", containerId: "container" });
   });
@@ -68,12 +88,14 @@ describe("planContainer", () => {
       planContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "restarting",
           gitTipCommit: "commit",
           configHash,
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "reuse", containerId: "container" });
   });
@@ -83,12 +105,14 @@ describe("planContainer", () => {
       planContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "exited",
           gitTipCommit: "commit",
           configHash,
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "start", containerId: "container" });
   });
@@ -98,6 +122,7 @@ describe("planContainer", () => {
       planContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "running",
           gitTipCommit: "commit",
           configHash: getContainerConfigHash({
@@ -108,6 +133,7 @@ describe("planContainer", () => {
         getContainerConfigHash({
           portMappings: [{ hostPort: 9090, containerPort: 80 }],
         }),
+        "sha256:selected",
       ),
     ).toEqual({ action: "recreate", existingContainerId: "container" });
   });
@@ -173,12 +199,14 @@ describe("planContainer", () => {
       planContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "running",
           gitTipCommit: "commit",
           configHash: legacyMappedHash,
         },
         "commit",
         getContainerConfigHash({ portMappings: mappings }),
+        "sha256:selected",
       ),
     ).toEqual({ action: "recreate", existingContainerId: "container" });
   });
@@ -225,7 +253,9 @@ describe("planRacedContainer", () => {
   const configHash = getContainerConfigHash({});
 
   it("fails when no container won the race", () => {
-    expect(planRacedContainer(undefined, "commit", configHash)).toEqual({
+    expect(
+      planRacedContainer(undefined, "commit", configHash, "sha256:selected"),
+    ).toEqual({
       action: "fail",
     });
   });
@@ -235,12 +265,14 @@ describe("planRacedContainer", () => {
       planRacedContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "running",
           gitTipCommit: "other",
           configHash,
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "fail" });
   });
@@ -250,6 +282,7 @@ describe("planRacedContainer", () => {
       planRacedContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "running",
           gitTipCommit: "commit",
           configHash: getContainerConfigHash({
@@ -258,6 +291,7 @@ describe("planRacedContainer", () => {
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "fail" });
   });
@@ -267,12 +301,14 @@ describe("planRacedContainer", () => {
       planRacedContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "running",
           gitTipCommit: "commit",
           configHash,
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "adopt", containerId: "container" });
   });
@@ -282,12 +318,14 @@ describe("planRacedContainer", () => {
       planRacedContainer(
         {
           id: "container",
+          imageId: "sha256:selected",
           state: "restarting",
           gitTipCommit: "commit",
           configHash,
         },
         "commit",
         configHash,
+        "sha256:selected",
       ),
     ).toEqual({ action: "adopt", containerId: "container" });
   });
@@ -297,9 +335,16 @@ describe("planRacedContainer", () => {
     (state) => {
       expect(
         planRacedContainer(
-          { id: "container", state, gitTipCommit: "commit", configHash },
+          {
+            id: "container",
+            imageId: "sha256:selected",
+            state,
+            gitTipCommit: "commit",
+            configHash,
+          },
           "commit",
           configHash,
+          "sha256:selected",
         ),
       ).toEqual({ action: "start", containerId: "container" });
     },
@@ -499,3 +544,59 @@ describe("validateDockerfileImageReferences", () => {
     },
   );
 });
+
+describe("build identity", () => {
+  const identity = (
+    dockerfile = "nested/Dockerfile",
+    context?: string,
+    repository = "https://example.test/project.git",
+    commit = "abc123",
+  ) => getBuildIdentity(repository, commit, dockerfile, context);
+
+  it("normalizes equivalent paths and preserves the omitted parent context", () => {
+    expect(identity()).toMatch(/^v1_[a-f0-9]{64}$/);
+    expect(identity(" /nested\\.\\Dockerfile ")).toBe(identity());
+    expect(identity("nested//Dockerfile")).toBe(identity());
+    expect(identity("nested/Dockerfile", "./nested//")).toBe(identity());
+    expect(identity("Dockerfile")).toBe(identity("./Dockerfile", "."));
+    expect(identity("nested/Dockerfile", ".")).not.toBe(identity());
+  });
+
+  it("distinguishes Dockerfile, repository and exact commit", () => {
+    expect(identity("nested/Otherfile")).not.toBe(identity());
+    expect(
+      identity(undefined, undefined, "https://example.test/other.git"),
+    ).not.toBe(identity());
+    expect(identity(undefined, undefined, undefined, "abc1234")).not.toBe(
+      identity(),
+    );
+  });
+
+  it.each([undefined, "", "v0_old", "v1_other"])(
+    "rejects absent or mismatched image metadata %s",
+    (buildIdentity) => {
+      expect(
+        planImage({ id: "sha256:legacy", buildIdentity }, identity()),
+      ).toEqual({ action: "build" });
+    },
+  );
+});
+
+it.each(["running", "restarting", "exited", "created"])(
+  "does not reuse or adopt a different image in state %s",
+  (state) => {
+    const container = {
+      id: "container",
+      imageId: "sha256:other",
+      state,
+      gitTipCommit: "commit",
+      configHash: "config",
+    };
+    expect(
+      planContainer(container, "commit", "config", "sha256:selected"),
+    ).toEqual({ action: "recreate", existingContainerId: "container" });
+    expect(
+      planRacedContainer(container, "commit", "config", "sha256:selected"),
+    ).toEqual({ action: "fail" });
+  },
+);

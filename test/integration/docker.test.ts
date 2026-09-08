@@ -1,5 +1,6 @@
+import { verifyBuildIdentity } from "./helpers/buildIdentity.js";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, copyFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -130,10 +131,11 @@ describe("docker adapter", () => {
       'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN printf \'%s\\n\' \'#!/bin/sh\' \'printf "HTTP/1.1 200 OK\\\\r\\\\nContent-Length: 14\\\\r\\\\n\\\\r\\\\nloopback-only\\\\n"\' > /response && chmod +x /response\nCMD ["nc", "-lk", "-p", "8080", "-e", "/response"]\n',
     );
 
-    await docker.ensureImageExists(portApplication, commit);
+    const portImage = await docker.ensureImageExists(portApplication, commit);
     const started = await docker.ensureContainerRunning(
       portApplication,
       commit,
+      portImage.imageId,
     );
     const inspect = await new Dockerode()
       .getContainer(started.containerId)
@@ -186,7 +188,11 @@ describe("docker adapter", () => {
       imageId: built.imageId,
     });
 
-    const started = await docker.ensureContainerRunning(application, commit);
+    const started = await docker.ensureContainerRunning(
+      application,
+      commit,
+      built.imageId,
+    );
     expect(started).toMatchObject({ wasCreated: true, wasStarted: true });
     expect(
       existsSync(
@@ -222,7 +228,9 @@ describe("docker adapter", () => {
         ],
       }),
     );
-    expect(await docker.ensureContainerRunning(application, commit)).toEqual({
+    expect(
+      await docker.ensureContainerRunning(application, commit, built.imageId),
+    ).toEqual({
       wasCreated: false,
       wasStarted: false,
       containerId: started.containerId,
@@ -242,13 +250,17 @@ describe("docker adapter", () => {
     // Reuse and start make no host-environment read, while a failed recreate
     // checks before removing the current container.
     delete process.env[hostEnvironmentName];
-    expect(await docker.ensureContainerRunning(application, commit)).toEqual({
+    expect(
+      await docker.ensureContainerRunning(application, commit, built.imageId),
+    ).toEqual({
       wasCreated: false,
       wasStarted: false,
       containerId: started.containerId,
     });
     await new Dockerode().getContainer(started.containerId).stop();
-    expect(await docker.ensureContainerRunning(application, commit)).toEqual({
+    expect(
+      await docker.ensureContainerRunning(application, commit, built.imageId),
+    ).toEqual({
       wasCreated: false,
       wasStarted: true,
       containerId: started.containerId,
@@ -260,7 +272,11 @@ describe("docker adapter", () => {
     );
     expect(replacementImage.imageId).not.toBe(built.imageId);
     await expect(
-      docker.ensureContainerRunning(application, replacementCommit),
+      docker.ensureContainerRunning(
+        application,
+        replacementCommit,
+        replacementImage.imageId,
+      ),
     ).rejects.toThrow(
       `Host environment variable '${hostEnvironmentName}' is not set`,
     );
@@ -298,8 +314,15 @@ describe("docker adapter", () => {
       'FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nCMD ["sh", "-c", "echo crashing-on-boot >&2; exit 3"]\n',
     );
 
-    await docker.ensureImageExists(crashingApplication, crashingCommit);
-    await docker.ensureContainerRunning(crashingApplication, crashingCommit);
+    const crashImage = await docker.ensureImageExists(
+      crashingApplication,
+      crashingCommit,
+    );
+    await docker.ensureContainerRunning(
+      crashingApplication,
+      crashingCommit,
+      crashImage.imageId,
+    );
 
     // The restart policy keeps the container alive as a slot, so it is seen
     // either mid-restart or between attempts. Both carry the last exit code.
@@ -348,15 +371,23 @@ describe("docker adapter", () => {
       );
     }
 
-    await docker.ensureImageExists(shortApplication, shortCommit);
-    await docker.ensureImageExists(longApplication, longCommit);
+    const shortImage = await docker.ensureImageExists(
+      shortApplication,
+      shortCommit,
+    );
+    const longImage = await docker.ensureImageExists(
+      longApplication,
+      longCommit,
+    );
     const longStarted = await docker.ensureContainerRunning(
       longApplication,
       longCommit,
+      longImage.imageId,
     );
     const shortStarted = await docker.ensureContainerRunning(
       shortApplication,
       shortCommit,
+      shortImage.imageId,
     );
 
     const shortRecreated = await docker.ensureContainerRunning(
@@ -365,6 +396,7 @@ describe("docker adapter", () => {
         EnvironmentVariables: { VERSION: "updated" },
       },
       shortCommit,
+      shortImage.imageId,
     );
 
     expect(shortRecreated.containerId).not.toBe(shortStarted.containerId);
@@ -472,14 +504,22 @@ describe("docker adapter", () => {
     );
 
     const raceCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
-    await docker.ensureImageExists(raceApplication, raceCommit);
+    let raceImage = await docker.ensureImageExists(raceApplication, raceCommit);
 
     // Two pollers racing to create the SAME version: the loser must detect
     // that the winner already created exactly the container it wanted, and
     // adopt it instead of failing.
     const sameVersionResults = await Promise.all([
-      docker.ensureContainerRunning(raceApplication, raceCommit),
-      docker.ensureContainerRunning(raceApplication, raceCommit),
+      docker.ensureContainerRunning(
+        raceApplication,
+        raceCommit,
+        raceImage.imageId,
+      ),
+      docker.ensureContainerRunning(
+        raceApplication,
+        raceCommit,
+        raceImage.imageId,
+      ),
     ]);
     expect(sameVersionResults[0].containerId).toBe(
       sameVersionResults[1].containerId,
@@ -488,16 +528,31 @@ describe("docker adapter", () => {
 
     await docker.cleanupTestCreated();
 
-    // Two pollers racing to create DIFFERENT versions: the loser must not
+    // Two pollers racing to create DIFFERENT images at the same commit: the loser must not
     // silently adopt the winner's container, since that would leave the
     // wrong version running while reporting success.
-    const otherCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
-    await docker.ensureImageExists(raceApplication, raceCommit);
-    await docker.ensureImageExists(raceApplication, otherCommit);
+    const otherCommit = raceCommit;
+    await copyFile(
+      path.join(repoDirectory, "Dockerfile"),
+      path.join(repoDirectory, "Otherfile"),
+    );
+    raceImage = await docker.ensureImageExists(raceApplication, raceCommit);
+    const otherImage = await docker.ensureImageExists(
+      { ...raceApplication, DockerfilePath: "Otherfile" },
+      otherCommit,
+    );
 
     const mismatchedResults = await Promise.allSettled([
-      docker.ensureContainerRunning(raceApplication, raceCommit),
-      docker.ensureContainerRunning(raceApplication, otherCommit),
+      docker.ensureContainerRunning(
+        raceApplication,
+        raceCommit,
+        raceImage.imageId,
+      ),
+      docker.ensureContainerRunning(
+        raceApplication,
+        otherCommit,
+        otherImage.imageId,
+      ),
     ]);
     expect(
       mismatchedResults.filter((r) => r.status === "fulfilled"),
@@ -517,17 +572,32 @@ describe("docker adapter", () => {
     // failure, and both must land on the same replacement container.
     const upgradeFromCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
     const upgradeToCommit = { hash: crypto.randomUUID().replaceAll("-", "") };
-    await docker.ensureImageExists(raceApplication, upgradeFromCommit);
-    await docker.ensureImageExists(raceApplication, upgradeToCommit);
+    const upgradeFromImage = await docker.ensureImageExists(
+      raceApplication,
+      upgradeFromCommit,
+    );
+    const upgradeToImage = await docker.ensureImageExists(
+      raceApplication,
+      upgradeToCommit,
+    );
     const upgradeFromResult = await docker.ensureContainerRunning(
       raceApplication,
       upgradeFromCommit,
+      upgradeFromImage.imageId,
     );
     expect(upgradeFromResult.wasCreated).toBe(true);
 
     const upgradeResults = await Promise.all([
-      docker.ensureContainerRunning(raceApplication, upgradeToCommit),
-      docker.ensureContainerRunning(raceApplication, upgradeToCommit),
+      docker.ensureContainerRunning(
+        raceApplication,
+        upgradeToCommit,
+        upgradeToImage.imageId,
+      ),
+      docker.ensureContainerRunning(
+        raceApplication,
+        upgradeToCommit,
+        upgradeToImage.imageId,
+      ),
     ]);
     expect(upgradeResults[0].containerId).toBe(upgradeResults[1].containerId);
     expect(upgradeResults[0].containerId).not.toBe(
@@ -537,3 +607,7 @@ describe("docker adapter", () => {
     await docker.cleanupTestCreated();
   });
 });
+
+it("uses build identity and exact image IDs through Poll", async () => {
+  await verifyBuildIdentity(settings, logger);
+}, 240000);

@@ -16,10 +16,11 @@ export interface OrchestratorDeps {
     application: Application,
     commit: { hash: string },
     signal?: AbortSignal,
-  ): Promise<void>;
+  ): Promise<{ imageId: string }>;
   ensureContainerRunning(
     application: Application,
     commit: { hash: string },
+    imageId: string,
   ): Promise<void>;
   cleanupInactive(applications: Application[]): Promise<void>;
 }
@@ -61,10 +62,10 @@ export function createOrchestratorDeps(
       ensureLocalRepository(settings, application, logger),
     getLatestCommit: (application) => getLatestCommit(settings, application),
     async ensureImageExists(application, commit, signal) {
-      await docker.ensureImageExists(application, commit, signal);
+      return docker.ensureImageExists(application, commit, signal);
     },
-    async ensureContainerRunning(application, commit) {
-      await docker.ensureContainerRunning(application, commit);
+    async ensureContainerRunning(application, commit, imageId) {
+      await docker.ensureContainerRunning(application, commit, imageId);
     },
     cleanupInactive: (applications) => docker.cleanupInactive(applications),
   };
@@ -94,10 +95,14 @@ export function createOrchestrator(
           const commit = await deps.getLatestCommit(application);
           stage = "build";
           signal?.throwIfAborted();
-          await deps.ensureImageExists(application, commit, signal);
+          const image = await deps.ensureImageExists(
+            application,
+            commit,
+            signal,
+          );
           signal?.throwIfAborted();
           stage = "start";
-          await deps.ensureContainerRunning(application, commit);
+          await deps.ensureContainerRunning(application, commit, image.imageId);
           results.push({ application: application.Name, ok: true });
         } catch (error) {
           const gitError =
