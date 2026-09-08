@@ -19,6 +19,7 @@ import {
   containerPortBindingHostIps,
   containerRestartPolicy,
   getBuildContextPathFromSetting,
+  getBuildIdentity,
   getContainerConfigHash,
   getDockerfilePathFromSetting,
   planContainer,
@@ -35,6 +36,7 @@ import { getApplicationRepoDirectory, getVolumeDirectory } from "./settings.js";
 const piploy = "piploy";
 const imageAppLabelName = `${piploy}_appName`;
 const imageCommitLabelName = `${piploy}_gitTipCommit`;
+const imageBuildIdentityLabelName = `${piploy}_buildIdentity`;
 const containerConfigLabelName = `${piploy}_configHash`;
 const testMarkerLabelName = `${piploy}_isCreatedByTest`;
 
@@ -88,6 +90,7 @@ export interface PiployDockerService {
   ensureContainerRunning(
     application: Application,
     commit: GitCommit,
+    imageId: string,
   ): Promise<EnsureContainerResult>;
   getDockerStatus(application: Application): Promise<DockerStatus>;
   /** Resolves to `undefined` when the Application has no container at all. */
@@ -151,6 +154,7 @@ function asDockerContainer(
 ): DockerContainer {
   return {
     id: container.Id,
+    imageId: container.ImageID,
     state: container.State,
     gitTipCommit: container.Labels[imageCommitLabelName],
     configHash: container.Labels[containerConfigLabelName],
@@ -456,9 +460,25 @@ export function createDockerService(
     signal?: AbortSignal,
   ): Promise<EnsureImageResult> {
     const commitTag = getImageVersionTagCommit(application.Name, commit);
-    const existingImage = await findImage(commitTag);
+    const buildIdentity = getBuildIdentity(
+      application.GitRepositoryUrl,
+      commit.hash,
+      application.DockerfilePath,
+      application.BuildContextPath,
+    );
+    const identityTag = getImageVersionTag(
+      application.Name,
+      `b_${buildIdentity}`,
+    );
+    const existingImage = await findImage(identityTag);
     const imagePlan = planImage(
-      existingImage ? { id: existingImage.Id } : undefined,
+      existingImage
+        ? {
+            id: existingImage.Id,
+            buildIdentity: existingImage.Labels?.[imageBuildIdentityLabelName],
+          }
+        : undefined,
+      buildIdentity,
     );
     if (imagePlan.action === "reuse") {
       return { wasCreated: false, imageId: imagePlan.imageId };
@@ -478,6 +498,7 @@ export function createDockerService(
     }
 
     const uniqueId = crypto.randomUUID();
+    const uniqueTag = getImageVersionTagUniqueId(application.Name, uniqueId);
     logger.info(`Building docker image for commit ${commit.hash}`);
     const started = Date.now();
     const options: PiployImageBuildOptions = {
@@ -485,12 +506,14 @@ export function createDockerService(
       t: [
         getImageVersionTagLatest(application.Name),
         commitTag,
-        getImageVersionTagUniqueId(application.Name, uniqueId),
+        uniqueTag,
+        identityTag,
       ],
       labels: {
         [`${piploy}_buildDate`]: new Date().toISOString(),
         [imageAppLabelName]: application.Name,
         [imageCommitLabelName]: commit.hash,
+        [imageBuildIdentityLabelName]: buildIdentity,
         [`${piploy}_uniqueId`]: uniqueId,
         ...(settings.IsTestRun ? { [testMarkerLabelName]: "true" } : {}),
       },
@@ -519,8 +542,11 @@ export function createDockerService(
       throw error;
     }
 
-    const builtImage = await findImage(commitTag);
-    if (!builtImage) {
+    const builtImage = await findImage(uniqueTag);
+    if (
+      !builtImage ||
+      builtImage.Labels?.[imageBuildIdentityLabelName] !== buildIdentity
+    ) {
       throw new Error(`Failed to create image for ${application.Name}`);
     }
     logger.info(
@@ -532,6 +558,7 @@ export function createDockerService(
   async function ensureContainerRunning(
     application: Application,
     commit: GitCommit,
+    imageId: string,
   ): Promise<EnsureContainerResult> {
     const containerName = getContainerName(application);
     const existingContainer = await findContainer(containerName);
@@ -551,6 +578,7 @@ export function createDockerService(
       existingContainer ? asDockerContainer(existingContainer) : undefined,
       commit.hash,
       configHash,
+      imageId,
     );
 
     if (containerPlan.action === "reuse") {
@@ -626,7 +654,7 @@ export function createDockerService(
     let createdContainer: Dockerode.Container;
     try {
       createdContainer = await docker.createContainer({
-        Image: getImageVersionTagCommit(application.Name, commit),
+        Image: imageId,
         name: containerName,
         Env: environment,
         ExposedPorts: exposedPorts,
@@ -660,6 +688,7 @@ export function createDockerService(
         racedContainer ? asDockerContainer(racedContainer) : undefined,
         commit.hash,
         configHash,
+        imageId,
       );
       if (racedPlan.action === "fail") throw error;
 

@@ -43,7 +43,7 @@ function createDeps(): OrchestratorDeps {
   return {
     ensureLocalRepository: vi.fn(),
     getLatestCommit: vi.fn(async () => ({ hash: "abc123" })),
-    ensureImageExists: vi.fn(),
+    ensureImageExists: vi.fn(async () => ({ imageId: "sha256:selected" })),
     ensureContainerRunning: vi.fn(),
     cleanupInactive: vi.fn(),
   };
@@ -62,10 +62,13 @@ describe("orchestrator", () => {
     });
     deps.ensureImageExists = vi.fn(async (application, commit) => {
       calls.push(`image:${application.Name}:${commit.hash}`);
+      return { imageId: `sha256:${application.Name}` };
     });
-    deps.ensureContainerRunning = vi.fn(async (application, commit) => {
-      calls.push(`container:${application.Name}:${commit.hash}`);
-    });
+    deps.ensureContainerRunning = vi.fn(
+      async (application, commit, imageId) => {
+        calls.push(`container:${application.Name}:${commit.hash}:${imageId}`);
+      },
+    );
     deps.cleanupInactive = vi.fn(
       async (configuredApplications: Application[]) => {
         calls.push(
@@ -80,11 +83,11 @@ describe("orchestrator", () => {
       "repository:first",
       "commit:first",
       "image:first:first",
-      "container:first:first",
+      "container:first:first:sha256:first",
       "repository:second",
       "commit:second",
       "image:second:second",
-      "container:second:second",
+      "container:second:second:sha256:second",
       "cleanup:first,second",
     ]);
   });
@@ -96,14 +99,19 @@ describe("orchestrator", () => {
     logger.error = (message) => errors.push(message);
     deps.ensureImageExists = vi.fn(async (application) => {
       if (application.Name === "first") throw new Error("build failed");
+      return { imageId: "sha256:selected" };
     });
 
     const results = await createOrchestrator(settings, logger, deps).poll();
 
     expect(deps.ensureContainerRunning).toHaveBeenCalledTimes(1);
-    expect(deps.ensureContainerRunning).toHaveBeenCalledWith(applications[1], {
-      hash: "abc123",
-    });
+    expect(deps.ensureContainerRunning).toHaveBeenCalledWith(
+      applications[1],
+      {
+        hash: "abc123",
+      },
+      "sha256:selected",
+    );
     expect(deps.cleanupInactive).toHaveBeenCalledWith(applications);
     expect(errors).toEqual(["build failed"]);
     expect(results).toEqual([
@@ -225,7 +233,7 @@ it("retries a postponed build on the next Poll without starting a replacement ea
   deps.ensureImageExists = vi
     .fn()
     .mockRejectedValueOnce(new BuildPostponedError("low storage"))
-    .mockResolvedValue(undefined);
+    .mockResolvedValue({ imageId: "sha256:selected" });
   const orchestrator = createOrchestrator(
     { ...settings, Applications: [applications[0]!] },
     createLogger(),
@@ -245,6 +253,7 @@ it("passes cancellation to builds and skips replacement and cleanup after shutdo
   deps.ensureImageExists = vi.fn(async (_application, _commit, signal) => {
     expect(signal).toBe(controller.signal);
     controller.abort();
+    return { imageId: "sha256:selected" };
   });
   await createOrchestrator(settings, createLogger(), deps).poll(
     controller.signal,

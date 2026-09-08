@@ -1,3 +1,4 @@
+import { verifyBuildIdentity } from "./helpers/buildIdentity.js";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
@@ -171,7 +172,11 @@ it("reuses dependencies on source changes and reversion, and invalidates them on
 it("postpones low-space builds, permits same-commit reuse, and builds after capacity is available", async () => {
   const previous = { hash: crypto.randomUUID() };
   const image = await service.ensureImageExists(application, previous);
-  const started = await service.ensureContainerRunning(application, previous);
+  const started = await service.ensureContainerRunning(
+    application,
+    previous,
+    image.imageId,
+  );
   const limited = createDockerService(
     {
       ...settings,
@@ -186,14 +191,23 @@ it("postpones low-space builds, permits same-commit reuse, and builds after capa
     wasCreated: false,
     imageId: image.imageId,
   });
-  const next = { hash: crypto.randomUUID() };
-  await expect(
-    limited.ensureImageExists(application, next),
-  ).rejects.toBeInstanceOf(BuildPostponedError);
+  const next = previous;
+  await writeFile(
+    path.join(repo, "Replacement"),
+    await readFile(path.join(repo, "Dockerfile")),
+  );
+  const changed = { ...application, DockerfilePath: "Replacement" };
+  await expect(limited.ensureImageExists(changed, next)).rejects.toBeInstanceOf(
+    BuildPostponedError,
+  );
   expect(
     (await engine.getContainer(started.containerId).inspect()).State.Running,
   ).toBe(true);
-  expect((await service.ensureImageExists(application, next)).wasCreated).toBe(
+  await limited.cleanupInactive([application]);
+  expect((await engine.getImage(image.imageId).inspect()).Id).toBe(
+    image.imageId,
+  );
+  expect((await service.ensureImageExists(changed, next)).wasCreated).toBe(
     true,
   );
 }, 240000);
@@ -445,4 +459,8 @@ it("runs Buildx through the installed single-file bundle during a real Poll", as
   } finally {
     await remote.close();
   }
+}, 240000);
+
+it("uses build identity and exact image IDs through Poll", async () => {
+  await verifyBuildIdentity(settings, logger);
 }, 240000);

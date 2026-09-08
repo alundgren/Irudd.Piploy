@@ -3,7 +3,8 @@
 ## Decision
 
 `dockerPlan.ts` contains the pure Docker decision policy. Given image or
-container state, a Git commit, and a runtime-configuration hash, `planImage` and `planContainer` select
+container state, a versioned build identity, an exact image ID, a Git commit,
+and a runtime-configuration hash, `planImage` and `planContainer` select
 `reuse`, `build`, `start`, or `recreate`; unit tests exercise these functions
 with plain values. `docker.ts` is the I/O adapter around dockerode and applies
 that policy while also handling cleanup.
@@ -55,3 +56,17 @@ and Application-image cleanup. Builder state is separate from Application
 images. Normal cleanup preserves every image referenced by a container and
 never invokes a global prune. A successful build does not imply successful
 container replacement.
+
+Build identity hashes the configured repository URL verbatim, exact commit,
+normalized Dockerfile path, and effective context. URL aliases are deliberately
+not combined, because different configured URLs may identify different sources.
+The serialized identity carries a version, and only its hash is stored in image
+labels and tags. Runtime-only settings remain in the container hash. Omitted
+context retains the Dockerfile-parent default. Both builders use this policy.
+
+Image reuse requires matching identity metadata. The build's unique tag locates
+and validates its result, so another build moving a compatibility tag cannot
+select the wrong result. The orchestrator carries the selected image ID into
+container creation. Ordinary reuse and concurrent-create adoption compare that
+ID alongside existing runtime checks. Legacy commit tags alone are cache misses.
+See [upgrade behavior](../../README.md#image-reuse-and-upgrades).
