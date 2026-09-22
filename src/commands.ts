@@ -350,7 +350,7 @@ export async function poll(
     // poller.
     if (await deps.isDaemonListening()) {
       commandFailed(
-        "Background service did not respond in time. It may be busy; try 'piploy poll' again shortly.",
+        "Background service did not respond in time. It may be busy; retry the same command shortly.",
       );
       return;
     }

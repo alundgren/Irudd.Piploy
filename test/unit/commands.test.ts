@@ -626,11 +626,11 @@ describe("commands", () => {
     deps.isDaemonListening = vi.fn(async () => true);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await poll(deps);
+    await poll(deps, "app");
 
     expect(deps.pollInline).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
-      "Background service did not respond in time. It may be busy; try 'piploy poll' again shortly.",
+      "Background service did not respond in time. It may be busy; retry the same command shortly.",
     );
     expect(process.exitCode).toBe(1);
   });
