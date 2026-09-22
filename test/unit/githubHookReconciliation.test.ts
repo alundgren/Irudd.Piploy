@@ -296,3 +296,65 @@ it("refuses creation after an invalid or oversized list", async () => {
     await running.stop();
   }
 });
+
+it.each([false, true])(
+  "rechecks hooks after POST timeout, created remotely=%s",
+  async (created) => {
+    vi.useFakeTimers();
+    let posts = 0;
+    const api = vi.fn<typeof fetch>(async (_url, init) => {
+      if (init?.method === "POST") {
+        posts++;
+        if (posts === 1)
+          return new Promise((_resolve, reject) => {
+            init.signal!.addEventListener("abort", () =>
+              reject(new Error(secret)),
+            );
+          });
+        return json({}, 201);
+      }
+      return json(posts > 0 && created ? [hook()] : []);
+    });
+    const { running } = setup(api);
+    await vi.advanceTimersByTimeAsync(hookRequestTimeoutMilliseconds + 1);
+    expect(running.status()[0]?.outcome).toBe("failed");
+    expect(posts).toBe(1);
+    await vi.advanceTimersByTimeAsync(interval * 2);
+    expect(api.mock.calls[2]?.[1]?.method).toBe("GET");
+    expect(posts).toBe(created ? 1 : 2);
+    expect(running.status()[0]?.outcome).toBe(created ? "existing" : "created");
+  },
+);
+it("coalesces successful reconciliation while a new repository is registered", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const api = vi.fn<typeof fetch>(async (_url, init) => {
+    await gate;
+    return init?.method === "POST" ? json({}, 201) : json([]);
+  });
+  const { running, settings } = setup(api);
+  settings.Applications.push(
+    application("https://github.com/owner/new", "New"),
+  );
+  for (let n = 0; n < 20; n++) running.request();
+  expect(api).toHaveBeenCalledTimes(1);
+  release();
+  await settled(running, 2);
+  expect(running.status().map((value) => value.outcome)).toEqual([
+    "created",
+    "created",
+  ]);
+  expect(
+    api.mock.calls.map(([url, init]) => [String(url), init?.method]),
+  ).toEqual([
+    [
+      "https://api.github.com/repos/owner/repo/hooks?per_page=100&page=1",
+      "GET",
+    ],
+    ["https://api.github.com/repos/owner/repo/hooks", "POST"],
+    ["https://api.github.com/repos/owner/new/hooks?per_page=100&page=1", "GET"],
+    ["https://api.github.com/repos/owner/new/hooks", "POST"],
+  ]);
+});
