@@ -18,7 +18,7 @@ export class BuildPostponedError extends Error {
   readonly code = "buildPostponed";
   constructor(reason: string) {
     super(
-      `Build postponed: ${reason}. Check Docker storage and Buildx prerequisites; Piploy will retry on a later Poll.`,
+      `Build postponed: ${reason}. Piploy will retry on a later eligible Poll.`,
     );
     this.name = "BuildPostponedError";
   }
@@ -29,7 +29,7 @@ export function buildkitConfiguration(
   targetBytes: number,
   minimumFreeBytes: number,
 ): string {
-  return `[worker.oci]\n  gc = true\n[[worker.oci.gcpolicy]]\n  all = true\n  keepDuration = "${retentionHours * 3600}s"\n  reservedSpace = 0\n  maxUsedSpace = ${targetBytes}\n  minFreeSpace = ${minimumFreeBytes}\n[worker.containerd]\n  enabled = false\n`;
+  return `[worker.oci]\n  gc = true\n[[worker.oci.gcpolicy]]\n  all = true\n  keepDuration = "${retentionHours * 3600}s"\n  reservedSpace = 0\n  maxUsedSpace = ${targetBytes}\n  minFreeSpace = ${minimumFreeBytes}\n[[worker.oci.gcpolicy]]\n  all = true\n  reservedSpace = 0\n  maxUsedSpace = ${targetBytes}\n  minFreeSpace = ${minimumFreeBytes}\n[worker.containerd]\n  enabled = false\n`;
 }
 
 export function parseAvailableBytes(output: string): number {
@@ -339,12 +339,17 @@ export function createBuildx(
     const policies = running?.Nodes?.[0]?.GCPolicy;
     if (
       running?.Nodes?.[0]?.Version !== "v0.32.0" ||
-      policies?.length !== 1 ||
+      policies?.length !== 2 ||
       policies[0].all !== true ||
       policies[0].keepDuration !== policy.CacheRetentionHours * 3600 * 1e9 ||
       policies[0].maxUsedSpace !== policy.CacheTargetBytes ||
       policies[0].minFreeSpace !== policy.MinimumFreeBytes ||
-      policies[0].reservedSpace !== 0
+      policies[0].reservedSpace !== 0 ||
+      policies[1].all !== true ||
+      (policies[1].keepDuration ?? 0) !== 0 ||
+      policies[1].maxUsedSpace !== policy.CacheTargetBytes ||
+      policies[1].minFreeSpace !== policy.MinimumFreeBytes ||
+      policies[1].reservedSpace !== 0
     ) {
       throw new Error(
         "Piploy BuildKit version or effective GC policy differs; stop the owned builder and restore the expected retention configuration",
@@ -353,8 +358,12 @@ export function createBuildx(
   }
 
   async function cleanup(signal?: AbortSignal): Promise<void> {
-    const run = (args: string[]) => command(args, { signal });
     await ensureBuilder(signal);
+    await prune(signal);
+  }
+
+  async function prune(signal?: AbortSignal): Promise<void> {
+    const run = (args: string[]) => command(args, { signal });
     const result = await run([
       "buildx",
       "prune",
@@ -362,8 +371,6 @@ export function createBuildx(
       name,
       "--force",
       "--all",
-      "--filter",
-      `until=${policy.CacheRetentionHours * 3600}s`,
       "--max-used-space",
       String(policy.CacheTargetBytes),
       "--min-free-space",
@@ -371,7 +378,21 @@ export function createBuildx(
       "--reserved-space",
       "0",
     ]);
-    logger.info(`Buildx cache cleanup: ${result.trim()}`);
+    logger.info(`Buildx cache cleanup reclaimed: ${result.trim()}`);
+    const usage = await run(["buildx", "du", "--builder", name]);
+    const summary = usage
+      .split("\n")
+      .filter((line) =>
+        /^(Shared|Private|Reclaimable|Total):/.test(line.trim()),
+      )
+      .map((line) => line.trim())
+      .join("; ");
+    if (!summary.includes("Total:") || !summary.includes("Reclaimable:")) {
+      throw new Error(
+        "Buildx cache usage summary was unavailable after cleanup",
+      );
+    }
+    logger.info(`Buildx cache usage after cleanup: ${summary}`);
   }
 
   async function availableBytes(signal?: AbortSignal): Promise<number> {
@@ -410,17 +431,14 @@ export function createBuildx(
     try {
       signal?.throwIfAborted();
       await ensureBuilder(signal);
-      let free = await availableBytes(signal);
-      if (free < policy.MinimumFreeBytes) {
-        await cleanup(signal);
-        free = await availableBytes(signal);
-      }
+      await prune(signal);
+      const free = await availableBytes(signal);
       logger.info(
         `Buildx Docker storage available=${free} minimum=${policy.MinimumFreeBytes} bytes`,
       );
       if (free < policy.MinimumFreeBytes)
         throw new Error(
-          `Docker storage has ${free} free bytes, below ${policy.MinimumFreeBytes}; protected cache will not be deleted`,
+          `Docker storage has ${free} free bytes, below ${policy.MinimumFreeBytes} after cache cleanup`,
         );
     } catch (error) {
       (input as Readable).destroy();
@@ -444,7 +462,19 @@ export function createBuildx(
     for (const [key, value] of Object.entries(labels))
       args.push("--label", `${key}=${value}`);
     args.push("-");
-    await command(args, { input, signal, progress: true });
+    try {
+      await command(args, { input, signal, progress: true });
+    } finally {
+      if (!signal?.aborted) {
+        try {
+          await prune(signal);
+        } catch (error) {
+          logger.warn(
+            `Buildx post-build cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    }
   }
 
   logger.info(

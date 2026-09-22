@@ -92,8 +92,9 @@ format or retention policy requires an explicit compatibility decision.
 
 The optional `Buildx` object enables the dedicated builder only when `Enabled`
 is true. Retention and storage settings are validated at startup and require
-a restart. Defaults protect cache used in the last 720 hours, target 8 GiB of
-cache, and require 5 GiB free before a new build. A storage postponement is a
+a restart. Defaults prefer cache used in the last 720 hours, enforce an 8 GiB cache
+cleanup limit regardless of age, and require 5 GiB free before a new build.
+Active records can exceed the limit until BuildKit releases them. A storage postponement is a
 build-stage Poll result with code `buildPostponed`; a later Poll retries it.
 Existing-image reuse precedes builder and storage checks. See the
 [Buildx setup](../../README.md#buildx-setup).

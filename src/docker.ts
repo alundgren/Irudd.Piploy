@@ -12,7 +12,7 @@ import DockerIgnore from "@balena/dockerignore";
 import Dockerode from "dockerode";
 import { pack } from "tar-fs";
 
-import { createBuildx } from "./buildx.js";
+import { BuildPostponedError, createBuildx } from "./buildx.js";
 import { decodeContainerLog, limitLogBytes } from "./containerLogs.js";
 import {
   containerLogConfig,
@@ -408,6 +408,10 @@ export function createDockerService(
   logger: Logger,
 ): PiployDockerService {
   const docker = new Dockerode();
+  const failedBuilds = new Map<
+    string,
+    { identity: string; failures: number; retryAt: number }
+  >();
   const buildx = settings.Buildx?.Enabled
     ? createBuildx(settings, docker, logger)
     : undefined;
@@ -481,7 +485,18 @@ export function createDockerService(
       buildIdentity,
     );
     if (imagePlan.action === "reuse") {
+      failedBuilds.delete(application.Name);
       return { wasCreated: false, imageId: imagePlan.imageId };
+    }
+
+    const previousFailure = failedBuilds.get(application.Name);
+    const failure =
+      previousFailure?.identity === buildIdentity ? previousFailure : undefined;
+    if (!failure) failedBuilds.delete(application.Name);
+    if (failure && Date.now() < failure.retryAt) {
+      throw new BuildPostponedError(
+        `this build failed ${failure.failures} time(s); next retry at ${new Date(failure.retryAt).toISOString()}`,
+      );
     }
 
     const repoDirectory = getApplicationRepoDirectory(settings, application);
@@ -535,24 +550,42 @@ export function createDockerService(
         );
         await followBuildProgress(docker, buildStream, logger);
       }
+
+      const builtImage = await findImage(uniqueTag);
+      if (
+        !builtImage ||
+        builtImage.Labels?.[imageBuildIdentityLabelName] !== buildIdentity
+      ) {
+        throw new Error(`Failed to create image for ${application.Name}`);
+      }
+      failedBuilds.delete(application.Name);
+      logger.info(
+        `Built docker image for commit ${commit.hash}; duration=${Date.now() - started}ms`,
+      );
+      return { wasCreated: true, imageId: builtImage.Id };
     } catch (error) {
+      if (!signal?.aborted && !(error instanceof BuildPostponedError)) {
+        const failures = (failure?.failures ?? 0) + 1;
+        const retryAt =
+          Date.now() +
+          Math.min(
+            5 * 60_000 * 2 ** Math.min(failures - 1, 7),
+            6 * 60 * 60_000,
+          );
+        failedBuilds.set(application.Name, {
+          identity: buildIdentity,
+          failures,
+          retryAt,
+        });
+        logger.warn(
+          `Build retry for ${application.Name} delayed until ${new Date(retryAt).toISOString()}`,
+        );
+      }
       logger.warn(
         `Image build did not complete; duration=${Date.now() - started}ms; current Application retained`,
       );
       throw error;
     }
-
-    const builtImage = await findImage(uniqueTag);
-    if (
-      !builtImage ||
-      builtImage.Labels?.[imageBuildIdentityLabelName] !== buildIdentity
-    ) {
-      throw new Error(`Failed to create image for ${application.Name}`);
-    }
-    logger.info(
-      `Built docker image for commit ${commit.hash}; duration=${Date.now() - started}ms`,
-    );
-    return { wasCreated: true, imageId: builtImage.Id };
   }
 
   async function ensureContainerRunning(

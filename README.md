@@ -126,15 +126,27 @@ Builder metadata lives in `.piploy-buildx/normal` next to `piploy.json`. Set
 `BUILDX_CONFIG` to that directory and use the daemon's Docker endpoint when
 running `docker buildx ls`, `docker buildx inspect <name>`, or
 `docker buildx du --builder <name>`. The builder name starts with `piploy-`.
-Inspect its running node for BuildKit 0.32.0 and exactly one GC policy matching
-the configured retention, cache target, and minimum free space, with zero
-reserved space. Cache and metadata survive daemon restarts.
+Inspect its running node for BuildKit 0.32.0 and two GC policies with zero
+reserved space. The first uses the configured retention, cache target, and
+minimum free space. The second enforces the storage limits without an age
+filter. Cache and metadata survive daemon restarts.
 
-Automatic GC and Poll cleanup protect cache used within the last 720 hours,
-with no broader fallback policy. Eligible old cache is reclaimed least recently
-used first. The 8 GiB target is soft; protected cache can exceed it. Running an
-Application does not refresh its build cache's last-use time. Changed Dockerfile
-inputs can invalidate cached layers even when those layers remain stored.
+The 8 GiB cache limit takes precedence over the 720-hour retention preference.
+Automatic GC reclaims old cache first, then younger cache if needed. Cleanup
+before and after each build and during full Polls enforces the limit regardless
+of record age, including snapshots left by failed builds. Cleanup logs both
+reclaimed bytes and remaining total and reclaimable usage. Active BuildKit
+records cannot be pruned, and builds can temporarily exceed the limit. This is
+a cache cleanup limit, not a filesystem quota. Running an Application does not
+refresh its build cache's last-use time.
+
+Failed builds retry after 5 minutes, doubling after each failure up to 6 hours.
+Polls before that deadline report `buildPostponed`. A new commit, repository,
+Dockerfile path, or build context is eligible immediately. Existing images are
+reused before checking the delay. Successful builds clear the failure count;
+restarting Piploy clears retry history. Cancellation and storage or prerequisite
+postponements do not increase the delay. Failed-build cleanup errors are logged
+without hiding the original build error or discarding a successful build.
 
 If storage cannot be measured or remains below the minimum after eligible
 cleanup, Piploy postpones new builds until a later Poll. Existing-image reuse
