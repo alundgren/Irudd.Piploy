@@ -11,7 +11,7 @@ import {
 } from "./containerLogs.js";
 import { isGitHubRepositoryName } from "./git.js";
 import type { DaemonRequest, DaemonResponse } from "./daemon.js";
-import type { ApplicationSchema } from "./settings.js";
+import { ApplicationNameSchema, type ApplicationSchema } from "./settings.js";
 import { piployVersion } from "./version.js";
 
 /** Fixed for v1. Making the port configurable is deliberately deferred. */
@@ -69,7 +69,10 @@ const githubRepositoryNameSchema = z
 function toolResult(response: DaemonResponse) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(response) }],
-    isError: !response.ok,
+    isError:
+      !response.ok ||
+      ("applications" in response &&
+        response.applications.some((application) => !application.ok)),
   };
 }
 
@@ -107,9 +110,16 @@ function createMcpServer(dispatch: McpDispatch): McpServer {
     "poll",
     {
       description:
-        "Run one reconciliation pass now using the current piploy.json loaded by the daemon: fetch each application's repository, rebuild, and restart what is out of date. If piploy.json changed after daemon startup, the Poll fails and requires a daemon restart.",
+        "Run one reconciliation pass now using the current piploy.json loaded by the daemon: fetch repositories, rebuild, and restart what is out of date. Supply application as an exact, case-sensitive configured Name to Poll only that Application without global cleanup; omit it to Poll all Applications. If piploy.json changed after daemon startup, the Poll fails and requires a daemon restart.",
+      inputSchema: { application: ApplicationNameSchema.optional() },
     },
-    async () => toolResult(await dispatch({ command: "poll" })),
+    async ({ application }) =>
+      toolResult(
+        await dispatch({
+          command: "poll",
+          ...(application === undefined ? {} : { application }),
+        }),
+      ),
   );
 
   server.registerTool(
@@ -191,6 +201,24 @@ async function handleRequest(
     void server.close();
   });
   await server.connect(transport);
+  const receive = transport.onmessage;
+  transport.onmessage = (message, extra) => {
+    // Older Poll clients omit arguments entirely. The SDK requires an object
+    // once a tool has an input schema, even when every field is optional.
+    if (
+      "method" in message &&
+      message.method === "tools/call" &&
+      message.params?.name === "poll" &&
+      message.params.arguments === undefined
+    ) {
+      receive?.(
+        { ...message, params: { ...message.params, arguments: {} } },
+        extra,
+      );
+      return;
+    }
+    receive?.(message, extra);
+  };
   await transport.handleRequest(request, response);
 }
 

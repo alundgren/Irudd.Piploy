@@ -7,7 +7,11 @@ import {
   type GitDiagnostic,
 } from "./git.js";
 import type { Logger } from "./logger.js";
-import type { Application, PiploySettings } from "./settings.js";
+import {
+  ApplicationNameSchema,
+  type Application,
+  type PiploySettings,
+} from "./settings.js";
 
 export interface OrchestratorDeps {
   ensureLocalRepository(application: Application): Promise<void>;
@@ -26,7 +30,43 @@ export interface OrchestratorDeps {
 }
 
 export interface Orchestrator {
-  poll(signal?: AbortSignal): Promise<PollApplicationResult[]>;
+  poll(
+    signal?: AbortSignal,
+    application?: string,
+  ): Promise<PollApplicationResult[]>;
+}
+
+export class PollSelectionError extends Error {
+  constructor(
+    readonly reason: "invalid-request" | "unknown-application",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PollSelectionError";
+  }
+}
+
+export function selectPollApplications(
+  settings: PiploySettings,
+  application?: string,
+): Application[] {
+  if (application === undefined) return settings.Applications;
+  if (!ApplicationNameSchema.safeParse(application).success) {
+    throw new PollSelectionError(
+      "invalid-request",
+      "Application must be a complete configured Name using letters, digits, underscores, or hyphens.",
+    );
+  }
+  const selected = settings.Applications.find(
+    ({ Name }) => Name === application,
+  );
+  if (!selected) {
+    throw new PollSelectionError(
+      "unknown-application",
+      `No Application named '${application}' is registered.`,
+    );
+  }
+  return [selected];
 }
 
 export type PollApplicationResult =
@@ -76,13 +116,17 @@ export function createOrchestrator(
   logger: Logger,
   deps: OrchestratorDeps = createOrchestratorDeps(settings, logger),
 ): Orchestrator {
-  async function poll(signal?: AbortSignal): Promise<PollApplicationResult[]> {
+  async function poll(
+    signal?: AbortSignal,
+    application?: string,
+  ): Promise<PollApplicationResult[]> {
+    const selected = selectPollApplications(settings, application);
     const pollLogger = logger.child({ operation: "poll" });
     pollLogger.info("Polling applications");
     const results: PollApplicationResult[] = [];
 
     try {
-      for (const application of settings.Applications) {
+      for (const application of selected) {
         if (signal?.aborted) break;
         const applicationLogger = pollLogger.child({
           application: application.Name,
@@ -122,8 +166,10 @@ export function createOrchestrator(
         }
       }
     } finally {
-      pollLogger.info("Cleaning up unused images");
-      if (!signal?.aborted) await deps.cleanupInactive(settings.Applications);
+      if (application === undefined && !signal?.aborted) {
+        pollLogger.info("Cleaning up unused images");
+        await deps.cleanupInactive(settings.Applications);
+      }
     }
 
     return results;

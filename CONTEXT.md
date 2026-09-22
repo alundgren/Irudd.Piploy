@@ -20,8 +20,11 @@ one.
 _Avoid_: Add, install, onboard, provision, deploy
 
 **Poll**:
-One pass in which Piploy brings every Application's repository, image, and
-container back in line with the configuration. Polling is Piploy's only
+One pass in which Piploy brings all Applications, or one selected Application's
+repository, image, and container, back in line with the configuration. Selection
+uses a complete, case-sensitive configured Name. A selected Poll leaves other
+Applications untouched and skips global inactive-resource cleanup; full Polls
+perform that cleanup. Polling is Piploy's only
 trigger for changing declared Application state; Docker may maintain that
 declared container between Polls. Nothing pushes work to Piploy. Each Poll discovers the current default branch
 from the configured Git remote and makes the owned checkout match its tip

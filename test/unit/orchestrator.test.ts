@@ -262,3 +262,85 @@ it("passes cancellation to builds and skips replacement and cleanup after shutdo
   expect(deps.ensureContainerRunning).not.toHaveBeenCalled();
   expect(deps.cleanupInactive).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "targets exactly one Application and skips global cleanup, build failure=%s",
+  async (fails) => {
+    const deps = createDeps();
+    if (fails)
+      vi.mocked(deps.ensureImageExists).mockRejectedValue(
+        new Error("build failed"),
+      );
+    const result = await createOrchestrator(
+      settings,
+      createLogger(),
+      deps,
+    ).poll(undefined, "first");
+    expect(result).toEqual([
+      fails
+        ? {
+            application: "first",
+            ok: false,
+            stage: "build",
+            message: "build failed",
+          }
+        : { application: "first", ok: true },
+    ]);
+    expect(deps.ensureLocalRepository).toHaveBeenCalledExactlyOnceWith(
+      applications[0],
+    );
+    expect(deps.getLatestCommit).toHaveBeenCalledExactlyOnceWith(
+      applications[0],
+    );
+    expect(deps.ensureImageExists).toHaveBeenCalledExactlyOnceWith(
+      applications[0],
+      { hash: "abc123" },
+      undefined,
+    );
+    expect(deps.ensureContainerRunning).toHaveBeenCalledTimes(fails ? 0 : 1);
+    if (!fails)
+      expect(deps.ensureContainerRunning).toHaveBeenCalledWith(
+        applications[0],
+        { hash: "abc123" },
+        "sha256:selected",
+      );
+    expect(deps.cleanupInactive).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["First", "fir", "missing", "", "first second", null, 42])(
+  "rejects selector %s before any work",
+  async (application) => {
+    const deps = createDeps();
+    await expect(
+      createOrchestrator(settings, createLogger(), deps).poll(
+        undefined,
+        application as string,
+      ),
+    ).rejects.toMatchObject({
+      reason: ["First", "fir", "missing"].includes(application as string)
+        ? "unknown-application"
+        : "invalid-request",
+    });
+    for (const dependency of Object.values(deps))
+      expect(dependency).not.toHaveBeenCalled();
+  },
+);
+
+it("cancels a selected build without starting any container", async () => {
+  const deps = createDeps();
+  const controller = new AbortController();
+  deps.ensureImageExists = vi.fn(async (_application, _commit, signal) => {
+    expect(signal).toBe(controller.signal);
+    controller.abort();
+    return { imageId: "selected" };
+  });
+  expect(
+    await createOrchestrator(settings, createLogger(), deps).poll(
+      controller.signal,
+      "second",
+    ),
+  ).toMatchObject([{ application: "second", ok: false, stage: "build" }]);
+  expect(deps.ensureContainerRunning).not.toHaveBeenCalled();
+  expect(deps.cleanupInactive).not.toHaveBeenCalled();
+});

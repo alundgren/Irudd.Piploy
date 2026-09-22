@@ -68,16 +68,14 @@ function addRegisterOptions(command: Command): Command {
     .option("--json <application>", "the whole Application as JSON");
 }
 
-// `register` and `logs` carry a payload, so each is wired to its own action
-// below. Everything else takes nothing but the dependencies.
+// Commands with arguments have their own actions below.
 const plainActions: Record<
-  Exclude<(typeof commandNames)[number], "register" | "logs">,
+  Exclude<(typeof commandNames)[number], "register" | "logs" | "poll">,
   (deps: CommandDeps) => Promise<void>
 > = {
   status,
   "service-start": serviceStart,
   "service-stop": serviceStop,
-  poll,
   wipeall: wipeAll,
 };
 
@@ -92,6 +90,17 @@ function defineCommand(
   commandName: (typeof commandNames)[number],
 ): void {
   const command = program.command(commandName);
+  if (commandName === "poll") {
+    command
+      .argument(
+        "[application]",
+        "exact, case-sensitive registered Application Name; omit to Poll all",
+      )
+      .action((application?: string) =>
+        runCommand((deps) => poll(deps, application)),
+      );
+    return;
+  }
   if (commandName === "logs") {
     command
       .argument("<application>", "registered application name")

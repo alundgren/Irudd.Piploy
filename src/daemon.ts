@@ -17,11 +17,14 @@ import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
 import { getTailscaleAddress } from "./mcpTailscale.js";
 import {
   createOrchestrator,
+  PollSelectionError,
+  selectPollApplications,
   type PollApplicationResult,
 } from "./orchestrator.js";
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
 import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
 import {
+  ApplicationNameSchema,
   ConfigurationChangedError,
   readConfigurationRevision,
   registerApplication,
@@ -42,7 +45,7 @@ export const configurationChangedMessage =
 
 export type DaemonRequest =
   | { command: "status" }
-  | { command: "poll" }
+  | { command: "poll"; application?: string }
   | { command: "stop" }
   | { command: "logs"; application: string; tail?: number }
   | { command: "check-github-repository-access"; repository: string }
@@ -141,7 +144,10 @@ export async function getApplicationStatus(
 }
 
 export interface DaemonDeps {
-  poll(signal?: AbortSignal): Promise<PollApplicationResult[]>;
+  poll(
+    signal?: AbortSignal,
+    application?: string,
+  ): Promise<PollApplicationResult[]>;
   getStatus(): Promise<ApplicationStatusSnapshot>;
   getLogs(application: string, tail?: number): Promise<ApplicationLogsResult>;
   checkGitHubRepositoryAccess(
@@ -199,8 +205,14 @@ function parseRequest(value: unknown): DaemonRequest | undefined {
     return undefined;
   }
   const command = value.command;
-  if (command === "status" || command === "poll" || command === "stop") {
+  if (command === "status" || command === "stop") {
     return { command };
+  }
+  if (command === "poll") {
+    if (!("application" in value) || value.application === undefined)
+      return { command };
+    const parsed = ApplicationNameSchema.safeParse(value.application);
+    return parsed.success ? { command, application: parsed.data } : undefined;
   }
   // Only the envelope is checked here. The payload is validated once, by the
   // Application schema, when the request runs.
@@ -258,7 +270,7 @@ export function createDaemonDeps(
   }
 
   return {
-    poll: (signal) => orchestrator.poll(signal),
+    poll: (signal, application) => orchestrator.poll(signal, application),
     getStatus: async () => ({
       applications: await Promise.all(
         settings.Applications.map((application) =>
@@ -530,9 +542,13 @@ export async function startDaemon(
           if (!isConfigurationCurrent()) {
             return configurationChangedResponse();
           }
+          selectPollApplications(settings, request.application);
           pollInProgress = true;
           try {
-            activePoll = deps.poll(pollCancellation.signal);
+            activePoll = deps.poll(
+              pollCancellation.signal,
+              request.application,
+            );
             const applications = await activePoll;
             if (!isConfigurationCurrent()) {
               return configurationChangedResponse();
@@ -544,6 +560,9 @@ export async function startDaemon(
           }
       }
     } catch (error) {
+      if (error instanceof PollSelectionError) {
+        return { ok: false, reason: error.reason, message: error.message };
+      }
       logError(logger, error);
       return { ok: false, reason: "failed" };
     }
@@ -624,7 +643,12 @@ export async function startDaemon(
    */
   function dispatch(request: DaemonRequest): Promise<DaemonResponse> {
     return new Promise((resolve) => {
-      if (!enqueueClient(request, resolve)) {
+      const parsed = parseRequest(request);
+      if (!parsed) {
+        resolve({ ok: false, reason: "invalid-request" });
+        return;
+      }
+      if (!enqueueClient(parsed, resolve)) {
         resolve({ ok: false, reason: "busy" });
       }
     });

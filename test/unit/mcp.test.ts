@@ -154,9 +154,60 @@ describe("mcp server", () => {
     const result = await client.callTool({ name: "poll" });
 
     expect(requests).toEqual([{ command: "poll" }]);
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
     expect(JSON.parse(textOf(result))).toEqual({ ok: true, applications });
   });
+
+  it("advertises the optional Poll selector and returns only its normal result", async () => {
+    const { client, requests } = await start(() => ({
+      ok: true,
+      applications: [{ application: "app", ok: true }],
+      configuration: "current",
+    }));
+    const tools = await client.listTools();
+    expect(
+      tools.tools.find(({ name }) => name === "poll")?.inputSchema.properties,
+    ).toHaveProperty("application");
+    const result = await client.callTool({
+      name: "poll",
+      arguments: { application: "app" },
+    });
+    expect(requests).toEqual([{ command: "poll", application: "app" }]);
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(textOf(result))).toMatchObject({
+      applications: [{ application: "app", ok: true }],
+    });
+  });
+
+  it("passes an exact Poll selector and preserves typed unknown-name failures", async () => {
+    const { client, requests } = await start(() => ({
+      ok: false,
+      reason: "unknown-application",
+      message: "No Application named 'App' is registered.",
+    }));
+    const result = await client.callTool({
+      name: "poll",
+      arguments: { application: "App" },
+    });
+    expect(requests).toEqual([{ command: "poll", application: "App" }]);
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(textOf(result))).toMatchObject({
+      reason: "unknown-application",
+    });
+  });
+
+  it.each(["", "app name", null, 42])(
+    "rejects invalid Poll selector %s without dispatching",
+    async (application) => {
+      const { client, requests } = await start(() => ({ ok: true }));
+      const result = await client.callTool({
+        name: "poll",
+        arguments: { application },
+      });
+      expect(result.isError).toBe(true);
+      expect(requests).toEqual([]);
+    },
+  );
 
   it("routes a repository access check through the daemon dispatcher", async () => {
     const repositoryAccess = {

@@ -89,9 +89,11 @@ const GitHubOwnerCredentialsSchema = z.record(
   HostEnvironmentReferenceSchema,
 );
 
+export const ApplicationNameSchema = z.string().regex(/^[A-Za-z0-9_-]+$/);
+
 export const ApplicationSchema = z
   .object({
-    Name: z.string().regex(/^[A-Za-z0-9_-]+$/),
+    Name: ApplicationNameSchema,
     GitRepositoryUrl: z.string(),
     DockerfilePath: z.string(),
     BuildContextPath: BuildContextPathSchema.optional(),
