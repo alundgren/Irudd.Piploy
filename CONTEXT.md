@@ -23,7 +23,12 @@ _Avoid_: Add, install, onboard, provision, deploy
 One pass in which Piploy brings every Application's repository, image, and
 container back in line with the configuration. Polling is Piploy's only
 trigger for changing declared Application state; Docker may maintain that
-declared container between Polls. Nothing pushes work to Piploy.
+declared container between Polls. Nothing pushes work to Piploy. Each Poll discovers the current default branch
+from the configured Git remote and makes the owned checkout match its tip
+before selecting a commit. This includes a default changed since cloning.
+Status reads that same current default without moving the checkout; differing
+branch names are not current even when their commits match. Git discovery or
+fetch failure prevents build and container replacement for that Application.
 _Avoid_: Sync, deploy, tick, reconcile loop
 
 **Application data**:

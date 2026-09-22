@@ -372,3 +372,22 @@ build leaves the current container running. Cleanup protects images referenced
 by containers, including after a replacement build moves the latest tag.
 Downgrading restores the older Bundle's incomplete reuse behavior and does
 not retain this fix.
+
+### Repository defaults and upgrades
+
+Every Poll discovers the configured Git remote's current default branch from
+its advertised HEAD, fetches that branch, and moves the Piploy-owned checkout
+to its tip before selecting a commit. This applies to startup, scheduled and
+manual Polls, and to any caller using the same Application polling operation.
+Status compares against that current default without moving the checkout. A
+changed branch is reported as not current even when its commit matches.
+Discovery or fetch failure leaves the running Application unchanged and
+reports a safe Git diagnostic. Ordinary polling uses the existing Git transport
+and owner credential policy; it needs no webhook credentials.
+
+After upgrading, existing Applications follow the current remote default on
+their next Poll, including checkouts that previously followed another branch.
+Changing a repository's default can therefore change the code running on the
+next Poll. This correction applies independently of webhook enablement.
+Disabling webhooks does not restore the previous branch policy. There is no
+Application branch-selection setting.

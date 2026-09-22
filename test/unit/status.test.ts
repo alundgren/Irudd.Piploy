@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { isRunningLatestVersion } from "../../src/status.js";
 
 const commitStatus = {
+  localBranch: "main",
+  remoteBranch: "main",
   local: {
     hash: "local",
     date: new Date("2026-01-01T00:00:00Z"),
@@ -26,6 +28,10 @@ describe("isRunningLatestVersion", () => {
   });
 
   it.each([
+    [
+      { ...commitStatus, localBranch: "old" },
+      { runningContainerHash: "remote" },
+    ],
     [null, { runningContainerHash: "remote" }],
     [commitStatus, { latestImageHash: "remote" }],
     [commitStatus, { runningContainerHash: "local" }],

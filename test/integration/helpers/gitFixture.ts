@@ -30,11 +30,14 @@ export interface GitFixtureRemote {
   baseUrl: string;
   /** Writes `files`, commits, and pushes to the served remote. Returns the new commit hash. */
   commit(files: Record<string, string>, message?: string): string;
+  setDefaultBranch(branch: string): void;
+  detachRemoteHead(): void;
   authenticatedRequests(): number;
   close(): Promise<void>;
 }
 
 interface GitFixtureOptions {
+  defaultBranch?: string;
   credentials?: { username: string; password: string };
 }
 
@@ -57,10 +60,10 @@ export async function startGitFixtureRemote(
     "init",
     "--bare",
     "-b",
-    "main",
+    options.defaultBranch ?? "main",
     path.join(reposDirectory, "repo.git"),
   ]);
-  runGit(workDirectory, ["init", "-b", "main"]);
+  runGit(workDirectory, ["init", "-b", options.defaultBranch ?? "main"]);
   runGit(workDirectory, [
     "remote",
     "add",
@@ -112,7 +115,7 @@ export async function startGitFixtureRemote(
     }
     runGit(workDirectory, ["add", "-A"]);
     runGit(workDirectory, ["commit", "-m", message, "--allow-empty"]);
-    runGit(workDirectory, ["push", "origin", "main"]);
+    runGit(workDirectory, ["push", "origin", "HEAD"]);
     return runGit(workDirectory, ["rev-parse", "HEAD"]);
   }
 
@@ -125,6 +128,20 @@ export async function startGitFixtureRemote(
     url,
     baseUrl,
     commit,
+    setDefaultBranch(branch) {
+      runGit(workDirectory, ["checkout", "-B", branch]);
+      runGit(workDirectory, ["push", "origin", "HEAD"]);
+      runGit(path.join(reposDirectory, "repo.git"), [
+        "symbolic-ref",
+        "HEAD",
+        `refs/heads/${branch}`,
+      ]);
+    },
+    detachRemoteHead() {
+      const bare = path.join(reposDirectory, "repo.git");
+      const oid = runGit(bare, ["rev-parse", "HEAD"]);
+      runGit(bare, ["update-ref", "--no-deref", "HEAD", oid]);
+    },
     authenticatedRequests: () => authenticatedRequestCount,
     close,
   };

@@ -21,6 +21,8 @@ export interface GitCommit {
 }
 
 export interface GitCommitStatus {
+  localBranch: string | undefined;
+  remoteBranch: string;
   local: GitCommit;
   remote: GitCommit;
 }
@@ -373,18 +375,33 @@ function hasGitDirectory(repoDirectory: string): boolean {
   return fs.existsSync(path.join(repoDirectory, ".git"));
 }
 
-async function resolveBranch(repoDirectory: string): Promise<string> {
-  const branch = await git.currentBranch({
-    fs,
-    dir: repoDirectory,
-    fullname: false,
+async function discoverDefaultBranch(
+  settings: PiploySettings,
+  application: Application,
+  gitHttp: GitHttp,
+): Promise<string> {
+  return runRemoteOperation(settings, async (authentication) => {
+    const refs = await git.listServerRefs({
+      http: gitHttp,
+      url: application.GitRepositoryUrl,
+      protocolVersion: 1,
+      symrefs: true,
+      ...authentication,
+    });
+    const target = refs.find((ref) => ref.ref === "HEAD")?.target;
+    if (
+      !target?.startsWith("refs/heads/") ||
+      !refs.some((ref) => ref.ref === target) ||
+      [...target].some(
+        (character) =>
+          character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127,
+      ) ||
+      /[/]$|[.][.]|@\{|[~^:?*[\\]|\/\/|\/\.|\.$|\.lock(?:\/|$)/.test(target)
+    ) {
+      throw new Error("Remote HEAD does not identify a usable branch");
+    }
+    return target.slice("refs/heads/".length);
   });
-  if (!branch) {
-    throw new Error(
-      `Could not determine the current branch for the repository at ${repoDirectory}`,
-    );
-  }
-  return branch;
 }
 
 async function readGitCommit(
@@ -423,21 +440,28 @@ async function resetHard(
 
 async function fetchOrigin(
   settings: PiploySettings,
+  application: Application,
   repoDirectory: string,
+  branch: string,
   gitHttp: GitHttp,
-): Promise<void> {
-  await runRemoteOperation(settings, (authentication) =>
-    git.fetch({
+): Promise<string> {
+  return runRemoteOperation(settings, async (authentication) => {
+    const result = await git.fetch({
       fs,
       http: gitHttp,
       dir: repoDirectory,
+      url: application.GitRepositoryUrl,
       remote: "origin",
+      ref: `refs/heads/${branch}`,
+      singleBranch: true,
       ...authentication,
-    }),
-  );
+    });
+    if (!result.fetchHead) throw new Error("Remote branch has no commit");
+    return result.fetchHead;
+  });
 }
 
-/** Clones `application`'s git repository if absent, otherwise fetches and hard-resets to the remote tip. */
+/** Makes the owned checkout match the configured remote's current default branch. */
 export async function ensureLocalRepository(
   settings: PiploySettings,
   application: Application,
@@ -446,44 +470,30 @@ export async function ensureLocalRepository(
 ): Promise<void> {
   const log = logger.child({ operation: "ensureLocalRepository" });
   const repoDirectory = getApplicationRepoDirectory(settings, application);
+  const branch = await discoverDefaultBranch(settings, application, gitHttp);
   fs.mkdirSync(repoDirectory, { recursive: true });
 
-  if (hasGitDirectory(repoDirectory)) {
-    log.info("Local exists. Fetching origin");
-    const branch = await resolveBranch(repoDirectory);
-    await fetchOrigin(settings, repoDirectory, gitHttp);
-
-    const localOid = await git.resolveRef({
-      fs,
-      dir: repoDirectory,
-      ref: "HEAD",
-    });
-    const remoteOid = await git.resolveRef({
-      fs,
-      dir: repoDirectory,
-      ref: `refs/remotes/origin/${branch}`,
-    });
-
-    if (localOid !== remoteOid) {
-      log.info(
-        `Latest remote origin/${branch} ${remoteOid} is ahead of local. Resetting local to match`,
-      );
-      await resetHard(repoDirectory, branch, remoteOid);
-    } else {
-      log.info("Local is up-to-date with remote already");
-    }
-  } else {
-    log.info("Cloning into remote");
+  if (!hasGitDirectory(repoDirectory)) {
     await runRemoteOperation(settings, (authentication) =>
       git.clone({
         fs,
         http: gitHttp,
         dir: repoDirectory,
         url: application.GitRepositoryUrl,
+        ref: `refs/heads/${branch}`,
         ...authentication,
       }),
     );
   }
+  const remoteOid = await fetchOrigin(
+    settings,
+    application,
+    repoDirectory,
+    branch,
+    gitHttp,
+  );
+  await resetHard(repoDirectory, branch, remoteOid);
+  log.info("Local checkout matches the current remote default branch");
 }
 
 /** Reads the commit at the local HEAD of `application`'s cloned repository. */
@@ -497,7 +507,7 @@ export async function getLatestCommit(
 }
 
 /**
- * Fetches and compares the local HEAD against the remote tracking branch.
+ * Fetches the current remote default and compares it without moving the checkout.
  * Returns `null` if the repository has not been cloned yet.
  */
 export async function getCommitStatus(
@@ -510,24 +520,34 @@ export async function getCommitStatus(
     return null;
   }
 
-  const branch = await resolveBranch(repoDirectory);
-  await fetchOrigin(settings, repoDirectory, gitHttp);
+  const branch = await discoverDefaultBranch(settings, application, gitHttp);
+  const remoteOid = await fetchOrigin(
+    settings,
+    application,
+    repoDirectory,
+    branch,
+    gitHttp,
+  );
+  const localBranch = await git.currentBranch({
+    fs,
+    dir: repoDirectory,
+    fullname: false,
+  });
 
   const localOid = await git.resolveRef({
     fs,
     dir: repoDirectory,
     ref: "HEAD",
   });
-  const remoteOid = await git.resolveRef({
-    fs,
-    dir: repoDirectory,
-    ref: `refs/remotes/origin/${branch}`,
-  });
-
   const [local, remote] = await Promise.all([
     readGitCommit(repoDirectory, localOid),
     readGitCommit(repoDirectory, remoteOid),
   ]);
 
-  return { local, remote };
+  return {
+    local,
+    remote,
+    localBranch: localBranch || undefined,
+    remoteBranch: branch,
+  };
 }
