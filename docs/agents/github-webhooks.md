@@ -1,4 +1,4 @@
-# Manual GitHub webhook setup
+# GitHub webhook setup
 
 A verified GitHub push can queue a Poll for every registered Application using
 that repository's default branch. The Poll still fetches the current remote
@@ -33,10 +33,13 @@ default and commit. A delayed delivery cannot select old code.
 4. Restart Piploy. Check its logs for `event=github-webhook-listener` and the
    configured port. A missing host secret or busy port logs an actionable
    warning while ordinary commands and scheduled Polls continue.
-5. In the GitHub repository's webhook settings, create a hook with payload URL
-   `https://hooks.example.com/public/github-webhook`, content type
-   `application/json`, the same signing secret, SSL verification enabled, and
-   push events only. This guide creates the hook manually.
+5. Configure `GitHubOwnerCredentials` for each repository owner with an exact
+   host-environment reference. For example, `"owner": "${hostEnv:GITHUB_TOKEN}"`.
+   Grant that token access to the repositories, Contents read access for Git,
+   and Webhooks write access for hook creation. Restart after credential changes.
+   Once the receiver is ready, Piploy lists hooks and creates an active JSON push
+   hook with the configured signing secret and TLS verification if the exact
+   callback URL is missing. Applications sharing a repository share one hook.
 6. Check the hook's Recent deliveries. A signed ping returns 200 without work.
    Push to the repository's actual default branch, which need not be `main`.
    A matching push returns 202 promptly. Check per-Application
@@ -93,10 +96,58 @@ fail its revision check; restart to load it and recover with the startup Poll.
 
 ## Disable
 
-Disable or remove the manual GitHub hook, remove the tunnel's webhook route,
+Disable or remove the GitHub hook, remove the tunnel's webhook route,
 set `GitHubWebhooks.Enabled` to false, and restart Piploy. Confirm the webhook
 port no longer listens. Ordinary startup, scheduled, and manual Polls continue.
 Remove the host signing secret when no hook uses it.
 
 See GitHub's [signature validation guide](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 and [delivery guidance](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks).
+
+
+## Automatic missing-hook creation and maintenance
+
+Reconciliation starts after listener readiness, after successful registration,
+and on a fixed ten-minute timer independent of Poll duration. Concurrent requests
+coalesce. Each repository is attempted at most once per ten minutes after its
+previous attempt finishes, so a retry may wait until the following timer tick.
+Newly registered repositories can be handled immediately. Requests time out after
+ten seconds, list responses are limited to 1 MiB, and pagination to 100 pages of
+100 hooks. Exceeding a limit prevents creation and calls for manual inspection.
+API requests are serial and run outside the Poll worker. GitHub rate-limit delays
+can postpone all hook requests beyond the normal interval. There are no immediate
+create retries: each later attempt lists hooks again, including after a timeout
+or conflict where creation may have succeeded.
+
+A successful registration remains saved and successful if hook creation fails.
+Read `githubHooks` in private daemon status or `event=github-hook-reconciliation`
+in logs for per-repository results and the last failure. Missing credentials
+require a populated owner environment reference; 401 requires replacing the token;
+403 requires Webhooks write permission; 404 requires checking repository access
+and the configured URL. Outages and rate limits retry automatically. Unsupported
+repository URLs are skipped with the Application name, never the unsafe URL.
+Ordinary polling continues in all these cases. A missing signing secret, listener
+bind failure, or changed configuration prevents hook creation. Restart after
+configuration changes. No API response bodies, tokens, or signing secrets appear
+in these diagnostics.
+
+An exact callback URL always prevents another hook from being created, even if
+its existing hook is disabled or misconfigured. Piploy only lists and creates:
+it never updates, reactivates, deletes, or replaces hooks. Fix reported push-event,
+JSON, delivery, or TLS-verification mismatches manually in GitHub. An existing
+hook's secret cannot be verified from listing. Send a signed default-branch push,
+inspect Recent deliveries for a 202 response, and check matching receiver and
+Poll logs. A successful list or create result alone does not verify tunnel access
+or delivery signature setup.
+
+For URL rotation, change the configured HTTPS origin and tunnel route, then
+restart. Piploy may create a hook for the new exact URL; remove the old hook
+manually. For signing-secret rotation, update the host environment and all existing
+hooks using that receiver, then restart and verify signed deliveries. Piploy does
+not adopt or overwrite existing secrets. Removing an Application or disabling the
+feature leaves hooks behind for operator cleanup. Unknown-repository deliveries
+cannot trigger a Poll. Disable the feature and remove unused hooks and tunnel
+routes as described above.
+
+See GitHub's [repository webhook API](https://docs.github.com/en/rest/repos/webhooks)
+for list/create permissions and fields.

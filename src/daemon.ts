@@ -13,6 +13,11 @@ import {
   type GitHubRepositoryAccessResult,
 } from "./git.js";
 import {
+  startHookReconciliation,
+  type HookReconciliation,
+  type HookOutcome,
+} from "./githubHookReconciliation.js";
+import {
   canonicalGitHubRepository,
   githubWebhookUrl,
   startGitHubWebhookServer,
@@ -111,6 +116,7 @@ export interface ApplicationDaemonStatus {
 }
 
 export interface DaemonStatus {
+  githubHooks?: HookOutcome[];
   applications: ApplicationDaemonStatus[];
   configuration: "current" | "restart-required" | "changed-during-command";
 }
@@ -167,6 +173,7 @@ export interface DaemonDeps {
 }
 
 export interface DaemonOptions {
+  webhookFetch?: typeof fetch;
   socketPath?: string;
   configPath?: string;
   loadedConfigurationRevision?: string;
@@ -439,6 +446,7 @@ export async function startDaemon(
   let shutdownPromise: Promise<void> | undefined;
   let mcpServer: McpServerHandle | undefined;
   let webhookServer: GitHubWebhookServer | undefined;
+  let hookReconciliation: HookReconciliation | undefined;
   const pendingWebhookApplications = new Set<string>();
   const recentWebhookDeliveries = new Map<string, number>();
 
@@ -474,6 +482,7 @@ export async function startDaemon(
               });
           }),
       close(server),
+      hookReconciliation?.stop(),
       webhookServer?.stop(),
       // A stuck MCP server must not hold up the shutdown a client just asked
       // for, and must not be what fails it. The socket teardown is the one
@@ -500,6 +509,7 @@ export async function startDaemon(
       settings.Applications.push(application);
       loadedConfigurationRevision = registered.revision;
       logger.info(`Registered application ${application.Name}`);
+      hookReconciliation?.request();
       return { ok: true, application };
     } catch (error) {
       if (error instanceof ConfigurationChangedError) {
@@ -525,6 +535,9 @@ export async function startDaemon(
             ok: true,
             status: {
               configuration,
+              ...(hookReconciliation
+                ? { githubHooks: hookReconciliation.status() }
+                : {}),
               applications:
                 configuration === "current"
                   ? status.applications
@@ -846,6 +859,16 @@ export async function startDaemon(
         if (stopping) await started.stop();
         else {
           webhookServer = started;
+          hookReconciliation = startHookReconciliation({
+            settings,
+            secret,
+            logger,
+            fetch: options.webhookFetch,
+            available: () =>
+              !stopping &&
+              webhookServer !== undefined &&
+              isConfigurationCurrent(),
+          });
           logger
             .child({
               event: "github-webhook-listener",

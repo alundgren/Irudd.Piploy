@@ -36,6 +36,14 @@ remain recovery after a crash, dropped request, limit rejection or restart.
 The operator can manually inspect and redeliver through GitHub. A default
 branch changed after a delivery is always resolved again by the Poll.
 
-Limits, manual setup, diagnostics and disabling are documented in
-[the webhook guide](../agents/github-webhooks.md). Automatic hook creation and
-Piploy-managed tunnels are outside this decision.
+Limits, setup, diagnostics and disabling are documented in
+[the webhook guide](../agents/github-webhooks.md). Piploy-managed tunnels remain operator-owned.
+
+When the receiver is ready, `githubHookReconciliation.ts` lists and creates missing
+repository hooks independently of the serial Poll worker. It uses the same
+canonical repository identity and owner host-environment credential references,
+with GitHub Webhooks write permission. Startup, registration and a fixed timer
+request coalesced reconciliation. Revision checks gate every API request; shutdown
+cancels requests. Only fixed diagnostics leave the adapter. An exact callback
+already present is never changed, including its secret. Hook removal, existing
+hook repair, and URL/secret rotation remain operator-owned.

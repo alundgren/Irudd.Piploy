@@ -176,6 +176,12 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
         ? "Configuration: piploy.json differs from the service; restart the service"
         : "Configuration: piploy.json changed while status was running; run status again",
   );
+  for (const hook of status.githubHooks ?? []) {
+    console.log(
+      `GitHub hook ${hook.repository}: ${hook.outcome}. ${hook.message}`,
+    );
+    if (hook.lastFailure) console.log(`  Last failure: ${hook.lastFailure}`);
+  }
   for (const application of status.applications) {
     console.log(`\n${application.application}`);
     console.log(

@@ -128,6 +128,7 @@ function deferred() {
 }
 async function daemon(
   options: {
+    webhookFetch?: typeof fetch;
     capacity?: number;
     poll?: DaemonDeps["poll"];
     enabled?: boolean;
@@ -148,6 +149,9 @@ async function daemon(
         application("Two", "https://GITHUB.com/OWNER/PROJECT"),
         application("Other", "https://git.example/owner/project"),
       ],
+      GitHubOwnerCredentials: options.webhookFetch
+        ? { owner: "${hostEnv:HOOK_TEST_TOKEN}" }
+        : undefined,
       GitHubWebhooks: {
         Enabled: options.enabled ?? true,
         Port: port,
@@ -158,9 +162,11 @@ async function daemon(
   };
   await writeFile(configPath, JSON.stringify(raw));
   vi.stubEnv("PIPLOY_TEST_WEBHOOK_SECRET", options.missingSecret ? "" : secret);
+  vi.stubEnv("HOOK_TEST_TOKEN", "hook-test-token");
   const poll = vi.fn(options.poll ?? (async () => []));
   const loaded = loadConfiguration(configPath);
   const running = await startDaemon(loaded.settings, logs.log, {
+    webhookFetch: options.webhookFetch,
     socketPath: path.join(directory, "daemon.sock"),
     configPath,
     loadedConfigurationRevision: loaded.revision,
@@ -490,7 +496,9 @@ describe("webhook admission through the real daemon listener", () => {
       ).toBe(true);
     }
     const occupied = await listener();
-    const instance = await daemon({ port: occupied.port });
+    const api = vi.fn<typeof fetch>();
+    const instance = await daemon({ port: occupied.port, webhookFetch: api });
+    expect(api).not.toHaveBeenCalled();
     expect(
       (await requestDaemon({ command: "status" }, instance.socketPath))?.ok,
     ).toBe(true);
@@ -555,4 +563,88 @@ describe("webhook admission through the real daemon listener", () => {
       ),
     );
   });
+});
+
+it("registers live, creates one hook, then admits a signed delivery only for the matching Application", async () => {
+  const hooks: unknown[] = [];
+  const api = vi.fn<typeof fetch>(async (_url, init) => {
+    if (init?.method === "POST") {
+      hooks.push(JSON.parse(init.body as string));
+      return new Response("{}", { status: 201 });
+    }
+    return new Response(JSON.stringify(hooks));
+  });
+  const running = await daemon({
+    applications: [application("Other", "https://git.example/other/repo")],
+    webhookFetch: api,
+  });
+  await vi.waitFor(() => expect(running.poll).toHaveBeenCalledTimes(1));
+  running.poll.mockClear();
+  const registered = await requestDaemon(
+    { command: "register", application: application("New") },
+    running.socketPath,
+  );
+  expect(registered?.ok).toBe(true);
+  await vi.waitFor(() => expect(hooks).toHaveLength(1));
+  expect(running.poll).not.toHaveBeenCalled();
+  expect(await send(running.port)).toBe(202);
+  await vi.waitFor(() => expect(running.poll).toHaveBeenCalledTimes(1));
+  expect(running.poll.mock.calls[0]?.[1]).toBe("New");
+  const status = await requestDaemon({ command: "status" }, running.socketPath);
+  expect(JSON.stringify(status)).toContain("created");
+  expect(
+    JSON.stringify([status, running.records, registered, running.raw]),
+  ).not.toContain("hook-test-token");
+  expect(
+    JSON.stringify([status, running.records, registered, running.raw]),
+  ).not.toContain(secret);
+});
+it("keeps successful registration successful when hook creation fails", async () => {
+  const api = vi.fn<typeof fetch>(
+    async () => new Response("untrusted secret response", { status: 403 }),
+  );
+  const running = await daemon({ applications: [], webhookFetch: api });
+  expect(
+    (
+      await requestDaemon(
+        { command: "register", application: application("New") },
+        running.socketPath,
+      )
+    )?.ok,
+  ).toBe(true);
+  await vi.waitFor(() =>
+    expect(JSON.stringify(running.records)).toContain("permission denied"),
+  );
+  expect(
+    loadConfiguration(running.configPath).settings.Applications,
+  ).toHaveLength(1);
+});
+it.each([{ enabled: false }, { missingSecret: true }])(
+  "does not reconcile without an available receiver: %j",
+  async (options) => {
+    const api = vi.fn<typeof fetch>();
+    const running = await daemon({ ...options, webhookFetch: api });
+    await requestDaemon({ command: "status" }, running.socketPath);
+    expect(api).not.toHaveBeenCalled();
+  },
+);
+it("does not create hooks when config changes during listing", async () => {
+  let release!: (response: Response) => void;
+  const api = vi.fn<typeof fetch>(
+    async () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const running = await daemon({ webhookFetch: api });
+  await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+  await writeFile(
+    running.configPath,
+    JSON.stringify({ ...running.raw, changed: true }),
+  );
+  release(new Response("[]"));
+  await vi.waitFor(() =>
+    expect(JSON.stringify(running.records)).toContain("configuration changed"),
+  );
+  expect(api).toHaveBeenCalledTimes(1);
 });
