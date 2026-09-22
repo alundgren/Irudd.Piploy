@@ -69,6 +69,25 @@ function cli(args: string[]): string {
   });
 }
 
+function cacheRecords(): {
+  id: string;
+  size: number;
+  inUse: boolean;
+  createdAt: string;
+  description: string;
+}[] {
+  return JSON.parse(
+    cli([
+      "exec",
+      `buildx_buildkit_${builder.name}0`,
+      "buildctl",
+      "du",
+      "--format",
+      "{{json .}}",
+    ]),
+  );
+}
+
 afterAll(async () => {
   await service.cleanupTestCreated();
   if (unrelatedCreated) cli(["buildx", "rm", unrelatedBuilder]);
@@ -260,107 +279,129 @@ it("propagates Dockerfile failures and cancellation without replacing the servin
   ).toBe(before.runningContainerHash);
 }, 240000);
 
-it("protects recent cache under GC pressure and reclaims old cache with an explicit age filter", async () => {
-  await writeFile(
-    path.join(repo, "Dockerfile"),
-    "FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN echo retention-marker > /retention\n",
+it("reclaims many young failed-build snapshots to the cache limit", async () => {
+  const target = 16 * 1024 * 1024;
+  await builder.cleanup();
+  const started = Math.floor(Date.now() / 1000) * 1000;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await writeFile(
+      path.join(repo, "Dockerfile"),
+      `FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN echo ${attempt} && dd if=/dev/urandom of=/failed-install bs=1M count=4\nRUN exit 42\n`,
+    );
+    await expect(
+      promisify(execFile)(
+        "docker",
+        ["buildx", "build", "--builder", builder.name, repo],
+        {
+          env: { ...process.env, BUILDX_CONFIG: builder.directory },
+          timeout: 120000,
+        },
+      ),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("exit code: 42"),
+    });
+  }
+  const before = cacheRecords();
+  expect(
+    before.filter(
+      (record) =>
+        !record.inUse &&
+        record.description.includes("/failed-install") &&
+        Date.parse(record.createdAt) >= started,
+    ).length,
+  ).toBeGreaterThanOrEqual(12);
+  expect(before.reduce((sum, record) => sum + record.size, 0)).toBeGreaterThan(
+    target,
   );
-  const protectedSettings = {
-    ...settings,
-    Buildx: { ...settings.Buildx!, CacheTargetBytes: 1 },
-  };
-  const protectedService = createDockerService(protectedSettings, logger);
-  const protectedBuilder = createBuildx(protectedSettings, engine, logger);
-  await protectedService.ensureImageExists(application, {
-    hash: crypto.randomUUID(),
+  expect(before.filter((record) => !record.inUse).length).toBeGreaterThan(10);
+  const limited = createBuildx(
+    { ...settings, Buildx: { ...settings.Buildx!, CacheTargetBytes: target } },
+    engine,
+    logger,
+  );
+  messages.length = 0;
+  await limited.cleanup();
+  const after = cacheRecords();
+  expect(
+    after.reduce((sum, record) => sum + record.size, 0),
+  ).toBeLessThanOrEqual(target);
+  expect(after.length).toBeLessThan(before.length);
+  console.info("Failed-build cache bytes:", {
+    before: before.reduce((sum, record) => sum + record.size, 0),
+    after: after.reduce((sum, record) => sum + record.size, 0),
+    target,
   });
-  const records = () =>
-    cli(["buildx", "du", "--builder", builder.name, "--format", "{{json .}}"])
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map(
-        (line) =>
-          JSON.parse(line) as {
-            ID: string;
-            Description: string;
-            Reclaimable: boolean;
-          },
-      );
-  const protectedIds = records()
-    .filter((record) => record.Reclaimable)
-    .map((record) => record.ID);
-  expect(protectedIds.length).toBeGreaterThan(0);
-  await new Promise((resolve) => setTimeout(resolve, 3000));
-  await protectedBuilder.cleanup();
-  expect(records().map((record) => record.ID)).toEqual(
-    expect.arrayContaining(protectedIds),
-  );
-  const shortSettings = {
-    ...settings,
-    Buildx: {
-      ...settings.Buildx!,
-      CacheRetentionHours: 1 / 3600,
-      CacheTargetBytes: 1,
-    },
-  };
-  const shortBuilder = createBuildx(shortSettings, engine, logger);
-  await shortBuilder.cleanup();
-  expect(records().map((record) => record.ID)).not.toEqual(
-    expect.arrayContaining(protectedIds),
-  );
+  expect(messages.join("\n")).toContain("Buildx cache usage after cleanup:");
+  expect(messages.join("\n")).toContain("Reclaimable:");
   expect((await service.getDockerStatus(application)).container?.state).toBe(
     "running",
   );
 }, 240000);
 
-it("reclaims eligible cache through automatic GC without removing Engine images", async () => {
+it("backs off the same failed build while new commits remain eligible", async () => {
+  const commit = { hash: crypto.randomUUID() };
+  await writeFile(
+    path.join(repo, "Dockerfile"),
+    "FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN exit 42\n",
+  );
+  await expect(service.ensureImageExists(application, commit)).rejects.toThrow(
+    "operation failed",
+  );
+  messages.length = 0;
+  await expect(service.ensureImageExists(application, commit)).rejects.toThrow(
+    "next retry at",
+  );
+  expect(
+    messages.some((message) => message.includes("Building docker image")),
+  ).toBe(false);
+  const now = Date.now();
+  const time = vi.spyOn(Date, "now").mockReturnValue(now + 5 * 60_000);
+  try {
+    await expect(
+      service.ensureImageExists(application, commit),
+    ).rejects.toThrow("operation failed");
+    let clock = now + 5 * 60_000;
+    for (const minutes of [10, 20, 40, 80, 160, 320, 360, 360]) {
+      time.mockReturnValue(clock + minutes * 60_000 - 1);
+      await expect(
+        service.ensureImageExists(application, commit),
+      ).rejects.toThrow("next retry at");
+      clock += minutes * 60_000;
+      time.mockReturnValue(clock);
+      await expect(
+        service.ensureImageExists(application, commit),
+      ).rejects.toThrow("operation failed");
+    }
+  } finally {
+    time.mockRestore();
+  }
+  await expect(
+    service.ensureImageExists(application, { hash: crypto.randomUUID() }),
+  ).rejects.toThrow("operation failed");
+}, 240000);
+
+it("automatically reclaims young cache above the limit without removing the running Application", async () => {
+  const target = 16 * 1024 * 1024;
   const automaticSettings = {
     ...settings,
-    Buildx: {
-      ...settings.Buildx!,
-      CacheRetentionHours: 1 / 3600,
-      CacheTargetBytes: 1,
-    },
+    Buildx: { ...settings.Buildx!, CacheTargetBytes: target },
   };
-  const automaticService = createDockerService(automaticSettings, logger);
+  const automaticBuilder = createBuildx(automaticSettings, engine, logger);
+  await automaticBuilder.cleanup();
   await writeFile(
     path.join(repo, "Dockerfile"),
-    "FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN echo automatic-marker > /automatic\n",
+    "FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\nRUN dd if=/dev/urandom of=/automatic bs=1M count=32\n",
   );
-  const image = await automaticService.ensureImageExists(application, {
-    hash: crypto.randomUUID(),
-  });
-  const records = () =>
-    cli(["buildx", "du", "--builder", builder.name, "--format", "{{json .}}"])
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { ID: string; Reclaimable: boolean });
-  const before = records()
-    .filter((record) => record.Reclaimable)
-    .map((record) => record.ID);
-  expect(before.length).toBeGreaterThan(0);
-  await new Promise((resolve) => setTimeout(resolve, 2500));
-  await writeFile(
-    path.join(repo, "Dockerfile"),
-    "FROM scratch\nCOPY source /source\n",
-  );
-  await automaticService.ensureImageExists(application, {
-    hash: crypto.randomUUID(),
-  });
+  cli(["buildx", "build", "--builder", builder.name, repo]);
+  const used = () =>
+    cacheRecords().reduce((sum, record) => sum + record.size, 0);
   const deadline = Date.now() + 90000;
-  while (
-    Date.now() < deadline &&
-    before.every((id) => records().some((record) => record.ID === id))
-  ) {
+  while (Date.now() < deadline && used() > target) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  expect(
-    before.every((id) => records().some((record) => record.ID === id)),
-  ).toBe(false);
-  expect((await engine.getImage(image.imageId).inspect()).Id).toBe(
-    image.imageId,
+  expect(used()).toBeLessThanOrEqual(target);
+  expect((await service.getDockerStatus(application)).container?.state).toBe(
+    "running",
   );
 }, 240000);
 

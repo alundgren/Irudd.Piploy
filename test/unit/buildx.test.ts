@@ -9,7 +9,7 @@ import { parseSettings } from "../../src/settings.js";
 const base = { RootDirectory: "/tmp/root", Applications: [] };
 
 describe("Buildx configuration", () => {
-  it("keeps existing installations opted out and defaults to the protected retention policy", () => {
+  it("keeps existing installations opted out and defaults to the bounded cache policy", () => {
     expect(parseSettings({ Piploy: base }).Buildx).toBeUndefined();
     expect(parseSettings({ Piploy: { ...base, Buildx: {} } }).Buildx).toEqual({
       Enabled: false,
@@ -27,12 +27,18 @@ describe("Buildx configuration", () => {
         ).toThrow();
     },
   );
-  it("has one age-protected automatic GC policy and no unprotected fallback", () => {
+  it("has an age-independent fallback after the retention policy", () => {
     const config = buildkitConfiguration(720, 8589934592, 5368709120);
-    expect(config.match(/\[\[worker.oci.gcpolicy\]\]/g)).toHaveLength(1);
+    expect(config.match(/\[\[worker.oci.gcpolicy\]\]/g)).toHaveLength(2);
     expect(config).toContain('keepDuration = "2592000s"');
     expect(config).toContain("maxUsedSpace = 8589934592");
     expect(config).toContain("minFreeSpace = 5368709120");
+    const fallback = config.split("[[worker.oci.gcpolicy]]")[2];
+    expect(fallback).not.toContain("keepDuration");
+    expect(fallback).toContain("all = true");
+    expect(fallback).toContain("reservedSpace = 0");
+    expect(fallback).toContain("maxUsedSpace = 8589934592");
+    expect(fallback).toContain("minFreeSpace = 5368709120");
   });
 });
 
