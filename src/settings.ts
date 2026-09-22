@@ -89,9 +89,11 @@ const GitHubOwnerCredentialsSchema = z.record(
   HostEnvironmentReferenceSchema,
 );
 
+export const ApplicationNameSchema = z.string().regex(/^[A-Za-z0-9_-]+$/);
+
 export const ApplicationSchema = z
   .object({
-    Name: z.string().regex(/^[A-Za-z0-9_-]+$/),
+    Name: ApplicationNameSchema,
     GitRepositoryUrl: z.string(),
     DockerfilePath: z.string(),
     BuildContextPath: BuildContextPathSchema.optional(),
@@ -112,11 +114,51 @@ export const ApplicationSchema = z
     }
   });
 
+const GitHubWebhooksSchema = z
+  .object({
+    Enabled: z.boolean().default(false),
+    Port: z.number().int().min(1).max(65535).optional(),
+    PublicUrl: z
+      .string()
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+          return (
+            /^https:\/\/[^/?#]+\/?$/.test(value) &&
+            url.protocol === "https:" &&
+            !/[\\@\s]/.test(value) &&
+            !url.username &&
+            !url.password &&
+            !url.search &&
+            !url.hash &&
+            url.pathname === "/"
+          );
+        } catch {
+          return false;
+        }
+      }, "Must be an HTTPS origin without credentials, path, query, or fragment")
+      .optional(),
+    Secret: HostEnvironmentReferenceSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.Enabled) return;
+    for (const key of ["Port", "PublicUrl", "Secret"] as const) {
+      if (value[key] === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Required when GitHubWebhooks is enabled",
+        });
+      }
+    }
+  });
+
 const PiploySettingsSchema = z.object({
   RootDirectory: z.string(),
   MinutesBetweenBackgroundPolls: z.number().optional(),
   Applications: z.array(ApplicationSchema),
   GitHubOwnerCredentials: GitHubOwnerCredentialsSchema.optional(),
+  GitHubWebhooks: GitHubWebhooksSchema.optional(),
   IsTestRun: z.boolean().optional(),
   Buildx: z
     .object({

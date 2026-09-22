@@ -20,6 +20,7 @@ import {
   getCommitStatus,
   getLatestCommit,
 } from "../../src/git.js";
+import { createOrchestrator } from "../../src/orchestrator.js";
 import {
   getApplicationRepoDirectory,
   getApplicationRootDirectory,
@@ -100,6 +101,122 @@ describe("git", () => {
   });
 
   describe("ensureLocalRepository", () => {
+    it.each(["main", "master", "release/current"])(
+      "follows initial default %s",
+      async (branch) => {
+        const fixture = await startGitFixtureRemote({ defaultBranch: branch });
+        try {
+          const hash = fixture.commit({ "index.html": branch });
+          application.GitRepositoryUrl = fixture.url;
+          await ensureLocalRepository(settings, application, logger);
+          expect((await getLatestCommit(settings, application)).hash).toBe(
+            hash,
+          );
+          expect(
+            execFileSync("git", ["branch", "--show-current"], {
+              cwd: getApplicationRepoDirectory(settings, application),
+            })
+              .toString()
+              .trim(),
+          ).toBe(branch);
+        } finally {
+          await fixture.close();
+        }
+      },
+    );
+
+    it.each([false, true])(
+      "follows a newly created default, equal commits: %s",
+      async (equalCommits) => {
+        const initial = remote.commit({ "index.html": "initial" });
+        await ensureLocalRepository(settings, application, logger);
+        remote.setDefaultBranch("release/new");
+        const expected = equalCommits
+          ? initial
+          : remote.commit({ "index.html": "new default" });
+        const directory = getApplicationRepoDirectory(settings, application);
+        const before = execFileSync("git", ["status", "--porcelain"], {
+          cwd: directory,
+        }).toString();
+        const status = await getCommitStatus(settings, application);
+        expect(status).toMatchObject({
+          localBranch: "main",
+          remoteBranch: "release/new",
+          local: { hash: initial },
+          remote: { hash: expected },
+        });
+        expect(
+          execFileSync("git", ["branch", "--show-current"], { cwd: directory })
+            .toString()
+            .trim(),
+        ).toBe("main");
+        expect(
+          execFileSync("git", ["status", "--porcelain"], {
+            cwd: directory,
+          }).toString(),
+        ).toBe(before);
+        await ensureLocalRepository(settings, application, logger);
+        expect(
+          execFileSync("git", ["branch", "--show-current"], { cwd: directory })
+            .toString()
+            .trim(),
+        ).toBe("release/new");
+        expect((await getLatestCommit(settings, application)).hash).toBe(
+          expected,
+        );
+        const next = remote.commit({ "index.html": "next" });
+        await ensureLocalRepository(settings, application, logger);
+        expect((await getLatestCommit(settings, application)).hash).toBe(next);
+      },
+    );
+
+    it.each(["detached", "discovery", "fetch"])(
+      "safely stops status and Poll after %s failure",
+      async (failure) => {
+        const hash = remote.commit({ "index.html": "initial" });
+        await ensureLocalRepository(settings, application, logger);
+        if (failure === "detached") remote.detachRemoteHead();
+        const http = {
+          request: async (request: Parameters<typeof gitHttp.request>[0]) => {
+            if (
+              failure === "discovery" ||
+              (failure === "fetch" && request.method === "POST")
+            )
+              throw new Error(sentinelToken);
+            return gitHttp.request(request);
+          },
+        };
+        await expect(
+          getCommitStatus(settings, application, http),
+        ).rejects.toMatchObject({
+          diagnostic: {
+            reason: "transport-or-fetch-failure",
+            message: "Git fetch failed.",
+          },
+        });
+        const build = vi.fn();
+        const start = vi.fn();
+        const poll = createOrchestrator(settings, logger, {
+          ensureLocalRepository: () =>
+            ensureLocalRepository(settings, application, logger, http),
+          getLatestCommit: () => getLatestCommit(settings, application),
+          ensureImageExists: build,
+          ensureContainerRunning: start,
+          cleanupInactive: async () => {},
+        });
+        expect(await poll.poll()).toMatchObject([
+          {
+            ok: false,
+            stage: "fetch",
+            gitError: { reason: "transport-or-fetch-failure" },
+          },
+        ]);
+        expect(build).not.toHaveBeenCalled();
+        expect(start).not.toHaveBeenCalled();
+        expect((await getLatestCommit(settings, application)).hash).toBe(hash);
+      },
+    );
+
     it("creates the application root and repo directories", async () => {
       remote.commit({ "index.html": "v1" }, "initial");
 

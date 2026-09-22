@@ -11,6 +11,13 @@ export interface LogScope {
   operation?: string;
   application?: string;
   gitRepository?: string;
+  event?: string;
+  outcome?: string;
+  status?: number;
+  durationMilliseconds?: number;
+  pending?: number;
+  port?: number;
+  publicUrl?: string;
 }
 
 export interface Logger {

@@ -121,12 +121,13 @@ describe("daemon", () => {
   async function start(
     deps: TestDaemonDeps,
     queueCapacity?: number,
+    configuredSettings: PiploySettings = settings,
   ): Promise<Daemon> {
     const socketPath = path.join(
       await mkdtemp(path.join(os.tmpdir(), "piploy-")),
       "piploy.sock",
     );
-    const daemon = await startDaemon(settings, createLogger(), {
+    const daemon = await startDaemon(configuredSettings, createLogger(), {
       socketPath,
       queueCapacity,
       pollIntervalMinutes: 60,
@@ -240,7 +241,7 @@ describe("daemon", () => {
       },
     });
     const pollResponse = await requestDaemon(
-      { command: "poll" },
+      { command: "poll", application: "app" },
       daemon.socketPath,
     );
     expect(pollResponse).toEqual({
@@ -469,6 +470,27 @@ describe("daemon", () => {
     ).resolves.toEqual({ ok: false, reason: "invalid-request" });
   });
 
+  it("rejects unknown and invalid Poll names without invoking reconciliation", async () => {
+    const poll = vi.fn(async () => []);
+    const daemon = await start({
+      poll,
+      getLogs: noLogs,
+      getStatus: async () => ({ applications: [] }),
+      attemptSelfUpdate: async () => "up-to-date",
+    });
+    await vi.waitFor(() => expect(poll).toHaveBeenCalledTimes(1));
+    for (const application of ["missing", "", "app name", null, 42]) {
+      expect(
+        await sendRequest(daemon.socketPath, { command: "poll", application }),
+      ).toMatchObject({
+        ok: false,
+        reason:
+          application === "missing" ? "unknown-application" : "invalid-request",
+      });
+    }
+    expect(poll).toHaveBeenCalledTimes(1);
+  });
+
   it("returns per-application poll results over the private socket", async () => {
     const applications = [
       {
@@ -494,50 +516,69 @@ describe("daemon", () => {
     });
   });
 
-  it("runs poll requests serially and rejects a client when its queue is full", async () => {
-    let releaseFirstPoll: (() => void) | undefined;
-    const firstPoll = new Promise<void>((resolve) => {
-      releaseFirstPoll = resolve;
-    });
-    let polls = 0;
-    const daemon = await start(
-      {
-        getLogs: noLogs,
-        poll: async () => {
-          polls += 1;
-          if (polls === 2) await firstPoll;
-          return [];
+  it.each([undefined, "app"])(
+    "serializes full and targeted Polls and rejects saturation, selector=%s",
+    async (application) => {
+      let releaseFirstPoll: (() => void) | undefined;
+      const firstPoll = new Promise<void>((resolve) => {
+        releaseFirstPoll = resolve;
+      });
+      let polls = 0;
+      const selectors: (string | undefined)[] = [];
+      const daemon = await start(
+        {
+          getLogs: noLogs,
+          poll: async (_signal, selected) => {
+            selectors.push(selected);
+            polls += 1;
+            if (polls === 2) await firstPoll;
+            return [];
+          },
+          getStatus: async () => ({ applications: [] }),
+          attemptSelfUpdate: async () => "up-to-date",
         },
-        getStatus: async () => ({ applications: [] }),
-        attemptSelfUpdate: async () => "up-to-date",
-      },
-      1,
-    );
+        1,
+        {
+          ...settings,
+          Applications: [
+            {
+              Name: "app",
+              GitRepositoryUrl: "https://example.test/app",
+              DockerfilePath: "Dockerfile",
+            },
+          ],
+        },
+      );
 
-    const first = sendRequest(daemon.socketPath, { command: "poll" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const second = sendRequest(daemon.socketPath, { command: "poll" });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await expect(
-      sendRequest(daemon.socketPath, { command: "poll" }),
-    ).resolves.toEqual({
-      ok: false,
-      reason: "busy",
-    });
+      const first = sendRequest(daemon.socketPath, {
+        command: "poll",
+        application,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const second = sendRequest(daemon.socketPath, { command: "poll" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await expect(
+        sendRequest(daemon.socketPath, { command: "poll" }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: "busy",
+      });
 
-    releaseFirstPoll!();
-    await expect(first).resolves.toEqual({
-      ok: true,
-      applications: [],
-      configuration: "current",
-    });
-    await expect(second).resolves.toEqual({
-      ok: true,
-      applications: [],
-      configuration: "current",
-    });
-    expect(polls).toBe(3);
-  });
+      releaseFirstPoll!();
+      await expect(first).resolves.toEqual({
+        ok: true,
+        applications: [],
+        configuration: "current",
+      });
+      await expect(second).resolves.toEqual({
+        ok: true,
+        applications: [],
+        configuration: "current",
+      });
+      expect(polls).toBe(3);
+      expect(selectors).toEqual([undefined, application, undefined]);
+    },
+  );
 
   it("answers status immediately with poll-in-progress instead of waiting behind a running poll", async () => {
     let releasePoll: (() => void) | undefined;
@@ -986,6 +1027,57 @@ describe("daemon", () => {
 
       expect(events).toEqual(["poll", "poll"]);
     });
+  });
+
+  it("keeps status and logs busy and cancels a targeted Poll on shutdown", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    let completed = false;
+    const daemon = await start(
+      {
+        getLogs: noLogs,
+        poll: async (signal, application) => {
+          if (application === undefined) return [];
+          expect(application).toBe("app");
+          receivedSignal = signal;
+          await new Promise<void>((resolve) =>
+            signal!.addEventListener("abort", () => resolve(), { once: true }),
+          );
+          completed = true;
+          return [];
+        },
+        getStatus: async () => ({ applications: [] }),
+        attemptSelfUpdate: async () => "up-to-date",
+      },
+      undefined,
+      {
+        ...settings,
+        Applications: [
+          {
+            Name: "app",
+            GitRepositoryUrl: "https://example.test/app",
+            DockerfilePath: "Dockerfile",
+          },
+        ],
+      },
+    );
+    const polling = requestDaemon(
+      { command: "poll", application: "app" },
+      daemon.socketPath,
+    );
+    await vi.waitFor(() => expect(receivedSignal).toBeDefined());
+    expect(
+      await requestDaemon({ command: "status" }, daemon.socketPath),
+    ).toEqual({ ok: false, reason: "poll-in-progress" });
+    expect(
+      await requestDaemon(
+        { command: "logs", application: "app" },
+        daemon.socketPath,
+      ),
+    ).toEqual({ ok: false, reason: "poll-in-progress" });
+    await daemon.stop();
+    await polling;
+    expect(receivedSignal!.aborted).toBe(true);
+    expect(completed).toBe(true);
   });
 
   it("cancels and awaits an active Poll when the daemon stops", async () => {

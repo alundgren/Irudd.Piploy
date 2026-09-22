@@ -169,7 +169,7 @@ reach it. Another user gets the offline fallback described under `status`.
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status`        | Prints whether the service loaded the current `piploy.json`, plus per-Application port mappings, Git state, Docker state, exit code, and restart count.                                                                             |
 | `logs`          | Prints one application's recent container output, running or exited. `--tail <lines>` sets how much. Requires the daemon to be running.                                                                                       |
-| `poll`          | Runs one Poll now. If `piploy.json` changed after service startup, it stops and asks for a service restart.                                                                                                                    |
+| `poll [application]` | Runs one Poll now for the exact, case-sensitive Application Name, or all Applications when omitted. Selected Polls skip global cleanup. If `piploy.json` changed after service startup, it stops and asks for a service restart.                                                                                                                    |
 | `service-start` | Runs the daemon in the foreground. This is what systemd invokes; do not run it by hand while the service is up.                                                                                                               |
 | `service-stop`  | Asks the running daemon to shut down.                                                                                                                                                                                         |
 | `register`      | Adds one application to `piploy.json` and to the running daemon, so the next poll deploys it without a restart. Requires the daemon to be running.                                                                            |
@@ -372,3 +372,43 @@ build leaves the current container running. Cleanup protects images referenced
 by containers, including after a replacement build moves the latest tag.
 Downgrading restores the older Bundle's incomplete reuse behavior and does
 not retain this fix.
+
+### Repository defaults and upgrades
+
+Every Poll discovers the configured Git remote's current default branch from
+its advertised HEAD, fetches that branch, and moves the Piploy-owned checkout
+to its tip before selecting a commit. This applies to startup, scheduled and
+manual Polls, and to any caller using the same Application polling operation.
+Status compares against that current default without moving the checkout. A
+changed branch is reported as not current even when its commit matches.
+Discovery or fetch failure leaves the running Application unchanged and
+reports a safe Git diagnostic. Ordinary polling uses the existing Git transport
+and owner credential policy; it needs no webhook credentials.
+
+After upgrading, existing Applications follow the current remote default on
+their next Poll, including checkouts that previously followed another branch.
+Changing a repository's default can therefore change the code running on the
+next Poll. This correction applies independently of webhook enablement.
+Disabling webhooks does not restore the previous branch policy. There is no
+Application branch-selection setting.
+
+
+Run `piploy poll MyApplication` to Poll only `MyApplication`, or `piploy poll`
+to Poll all registered Applications. The CLI also supports selected Polls when
+the daemon is absent. Unknown names and invalid names fail before any Poll work;
+failed Application results produce a nonzero CLI exit status.
+
+The MCP `poll` tool accepts optional input `{ "application": "MyApplication" }`.
+Omit `application` to Poll all Applications. Names match the complete configured
+`Name`, including case. A selected Poll uses the same daemon queue and current
+configuration checks as a full Poll. The response retains `applications` with
+the selected Application's normal result; failures also set MCP `isError`.
+
+## GitHub push-triggered Polls
+
+Piploy can accept signed GitHub default-branch push notifications on a separate
+loopback listener and promptly queue targeted Polls. This is optional and off
+by default. Follow the [manual webhook guide](docs/agents/github-webhooks.md)
+for configuration, a host-held secret, a tunnel restricted to the receiver,
+verification, limits and disabling. MCP remains private. Scheduled and startup
+Polls continue to recover missed deliveries.

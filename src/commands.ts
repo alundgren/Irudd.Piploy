@@ -14,8 +14,13 @@ import {
 } from "./daemon.js";
 import { createDockerService } from "./docker.js";
 import { createLogger } from "./logger.js";
-import type { PollApplicationResult } from "./orchestrator.js";
 import {
+  PollSelectionError,
+  selectPollApplications,
+  type PollApplicationResult,
+} from "./orchestrator.js";
+import {
+  ApplicationNameSchema,
   getApplicationDataDirectory,
   loadConfiguration,
   parseApplication,
@@ -29,13 +34,17 @@ import { piployVersion } from "./version.js";
 export type RegisterResult = DaemonResponse | undefined;
 export type InlinePollResult =
   | { ok: true; applications: PollApplicationResult[] }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      reason?: "invalid-request" | "unknown-application";
+    };
 
 export interface CommandDeps {
   requestDaemon(request: DaemonRequest): Promise<DaemonResponse | undefined>;
   isDaemonListening(): Promise<boolean>;
   computeStatusInline(): Promise<DaemonStatus>;
-  pollInline(): Promise<InlinePollResult>;
+  pollInline(application?: string): Promise<InlinePollResult>;
   register(application: unknown): Promise<RegisterResult>;
   wipeAll(): Promise<void>;
   getPreservedApplicationDataDirectories(): string[];
@@ -94,8 +103,8 @@ export function createCommandDeps(
               })),
       };
     },
-    pollInline: async () => {
-      const { daemonDeps, revision } = loadContext();
+    pollInline: async (application) => {
+      const { daemonDeps, revision, settings } = loadContext();
       if (!configurationIsCurrent(revision)) {
         return {
           ok: false,
@@ -103,7 +112,13 @@ export function createCommandDeps(
             "piploy.json changed before the Poll started. Run the command again.",
         };
       }
-      const applications = await daemonDeps.poll();
+      try {
+        selectPollApplications(settings, application);
+      } catch (error) {
+        if (!(error instanceof PollSelectionError)) throw error;
+        return { ok: false, reason: error.reason, message: error.message };
+      }
+      const applications = await daemonDeps.poll(undefined, application);
       if (!configurationIsCurrent(revision)) {
         return {
           ok: false,
@@ -161,6 +176,12 @@ function printStatus(status: DaemonStatus, daemonReachable: boolean): void {
         ? "Configuration: piploy.json differs from the service; restart the service"
         : "Configuration: piploy.json changed while status was running; run status again",
   );
+  for (const hook of status.githubHooks ?? []) {
+    console.log(
+      `GitHub hook ${hook.repository}: ${hook.outcome}. ${hook.message}`,
+    );
+    if (hook.lastFailure) console.log(`  Last failure: ${hook.lastFailure}`);
+  }
   for (const application of status.applications) {
     console.log(`\n${application.application}`);
     console.log(
@@ -311,8 +332,23 @@ export async function logs(
 }
 
 /** Requests an immediate daemon poll, or reconciles inline when no daemon is running. */
-export async function poll(deps: CommandDeps): Promise<void> {
-  const response = await deps.requestDaemon({ command: "poll" });
+export async function poll(
+  deps: CommandDeps,
+  application?: string,
+): Promise<void> {
+  if (
+    application !== undefined &&
+    !ApplicationNameSchema.safeParse(application).success
+  ) {
+    commandFailed(
+      "Invalid Application name. Use letters, digits, underscores, or hyphens.",
+    );
+    return;
+  }
+  const response = await deps.requestDaemon({
+    command: "poll",
+    ...(application === undefined ? {} : { application }),
+  });
   if (response === undefined) {
     // An unanswered request only means "run inline" when there is no daemon
     // to race against. A daemon that is actually listening but did not
@@ -320,11 +356,11 @@ export async function poll(deps: CommandDeps): Promise<void> {
     // poller.
     if (await deps.isDaemonListening()) {
       commandFailed(
-        "Background service did not respond in time. It may be busy; try 'piploy poll' again shortly.",
+        "Background service did not respond in time. It may be busy; retry the same command shortly.",
       );
       return;
     }
-    const inlineResult = await deps.pollInline();
+    const inlineResult = await deps.pollInline(application);
     if (!inlineResult.ok) {
       commandFailed(inlineResult.message);
       return;
@@ -359,6 +395,7 @@ function printPollResult(
     console.log("Poll completed.");
     return;
   }
+  process.exitCode = 1;
   console.log("Poll completed with failures:");
   for (const failure of failures) {
     console.log(

@@ -12,18 +12,36 @@ import {
   type GitDiagnostic,
   type GitHubRepositoryAccessResult,
 } from "./git.js";
+import {
+  startHookReconciliation,
+  type HookReconciliation,
+  type HookOutcome,
+} from "./githubHookReconciliation.js";
+import {
+  canonicalGitHubRepository,
+  githubWebhookUrl,
+  startGitHubWebhookServer,
+  webhookDeliveryLimit,
+  webhookDeliveryWindowMilliseconds,
+  type GitHubWebhookServer,
+  type WebhookAdmission,
+} from "./githubWebhooks.js";
 import type { Logger } from "./logger.js";
 import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
 import { getTailscaleAddress } from "./mcpTailscale.js";
 import {
   createOrchestrator,
+  PollSelectionError,
+  selectPollApplications,
   type PollApplicationResult,
 } from "./orchestrator.js";
 import { decideQueueAdmission, type QueueSource } from "./queuePolicy.js";
 import { attemptSelfUpdate, type SelfUpdateResult } from "./selfUpdate.js";
 import {
+  ApplicationNameSchema,
   ConfigurationChangedError,
   readConfigurationRevision,
+  parseHostEnvironmentReference,
   registerApplication,
   RegisterApplicationError,
   resolveConfigPath,
@@ -42,7 +60,7 @@ export const configurationChangedMessage =
 
 export type DaemonRequest =
   | { command: "status" }
-  | { command: "poll" }
+  | { command: "poll"; application?: string }
   | { command: "stop" }
   | { command: "logs"; application: string; tail?: number }
   | { command: "check-github-repository-access"; repository: string }
@@ -98,6 +116,7 @@ export interface ApplicationDaemonStatus {
 }
 
 export interface DaemonStatus {
+  githubHooks?: HookOutcome[];
   applications: ApplicationDaemonStatus[];
   configuration: "current" | "restart-required" | "changed-during-command";
 }
@@ -141,7 +160,10 @@ export async function getApplicationStatus(
 }
 
 export interface DaemonDeps {
-  poll(signal?: AbortSignal): Promise<PollApplicationResult[]>;
+  poll(
+    signal?: AbortSignal,
+    application?: string,
+  ): Promise<PollApplicationResult[]>;
   getStatus(): Promise<ApplicationStatusSnapshot>;
   getLogs(application: string, tail?: number): Promise<ApplicationLogsResult>;
   checkGitHubRepositoryAccess(
@@ -151,6 +173,7 @@ export interface DaemonDeps {
 }
 
 export interface DaemonOptions {
+  webhookFetch?: typeof fetch;
   socketPath?: string;
   configPath?: string;
   loadedConfigurationRevision?: string;
@@ -167,6 +190,7 @@ export interface Daemon {
 }
 
 interface QueuedRequest {
+  webhookApplication?: string;
   request: DaemonRequest;
   respond(response: DaemonResponse): void;
 }
@@ -199,8 +223,14 @@ function parseRequest(value: unknown): DaemonRequest | undefined {
     return undefined;
   }
   const command = value.command;
-  if (command === "status" || command === "poll" || command === "stop") {
+  if (command === "status" || command === "stop") {
     return { command };
+  }
+  if (command === "poll") {
+    if (!("application" in value) || value.application === undefined)
+      return { command };
+    const parsed = ApplicationNameSchema.safeParse(value.application);
+    return parsed.success ? { command, application: parsed.data } : undefined;
   }
   // Only the envelope is checked here. The payload is validated once, by the
   // Application schema, when the request runs.
@@ -258,7 +288,7 @@ export function createDaemonDeps(
   }
 
   return {
-    poll: (signal) => orchestrator.poll(signal),
+    poll: (signal, application) => orchestrator.poll(signal, application),
     getStatus: async () => ({
       applications: await Promise.all(
         settings.Applications.map((application) =>
@@ -415,6 +445,10 @@ export async function startDaemon(
   let activePoll: Promise<PollApplicationResult[]> | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let mcpServer: McpServerHandle | undefined;
+  let webhookServer: GitHubWebhookServer | undefined;
+  let hookReconciliation: HookReconciliation | undefined;
+  const pendingWebhookApplications = new Set<string>();
+  const recentWebhookDeliveries = new Map<string, number>();
 
   function isConfigurationCurrent(): boolean {
     return (
@@ -448,6 +482,8 @@ export async function startDaemon(
               });
           }),
       close(server),
+      hookReconciliation?.stop(),
+      webhookServer?.stop(),
       // A stuck MCP server must not hold up the shutdown a client just asked
       // for, and must not be what fails it. The socket teardown is the one
       // that decides whether the daemon stopped.
@@ -459,8 +495,7 @@ export async function startDaemon(
   /**
    * Registering writes `piploy.json` and then appends to the very array the
    * orchestrator re-reads on each poll, so the next poll picks the Application
-   * up (ADR-0007). It deliberately does not poll itself: polling is Piploy's
-   * only trigger, and nothing pushes work to it.
+   * up (ADR-0007). Registration does not itself start a Poll.
    */
   function runRegister(rawApplication: unknown): DaemonResponse {
     if (!isConfigurationCurrent()) return configurationChangedResponse();
@@ -474,6 +509,7 @@ export async function startDaemon(
       settings.Applications.push(application);
       loadedConfigurationRevision = registered.revision;
       logger.info(`Registered application ${application.Name}`);
+      hookReconciliation?.request();
       return { ok: true, application };
     } catch (error) {
       if (error instanceof ConfigurationChangedError) {
@@ -499,6 +535,9 @@ export async function startDaemon(
             ok: true,
             status: {
               configuration,
+              ...(hookReconciliation
+                ? { githubHooks: hookReconciliation.status() }
+                : {}),
               applications:
                 configuration === "current"
                   ? status.applications
@@ -530,9 +569,13 @@ export async function startDaemon(
           if (!isConfigurationCurrent()) {
             return configurationChangedResponse();
           }
+          selectPollApplications(settings, request.application);
           pollInProgress = true;
           try {
-            activePoll = deps.poll(pollCancellation.signal);
+            activePoll = deps.poll(
+              pollCancellation.signal,
+              request.application,
+            );
             const applications = await activePoll;
             if (!isConfigurationCurrent()) {
               return configurationChangedResponse();
@@ -544,6 +587,9 @@ export async function startDaemon(
           }
       }
     } catch (error) {
+      if (error instanceof PollSelectionError) {
+        return { ok: false, reason: error.reason, message: error.message };
+      }
       logError(logger, error);
       return { ok: false, reason: "failed" };
     }
@@ -554,7 +600,26 @@ export async function startDaemon(
       while (!stopping) {
         const queued = queue.shift();
         if (!queued) return;
+        if (queued.webhookApplication !== undefined) {
+          pendingWebhookApplications.delete(queued.webhookApplication);
+        }
+        const started = Date.now();
         const response = await runRequest(queued.request);
+        if (queued.webhookApplication !== undefined) {
+          logger
+            .child({
+              event: "github-webhook-poll",
+              application: queued.webhookApplication,
+              outcome:
+                response.ok &&
+                "applications" in response &&
+                response.applications.every((result) => result.ok)
+                  ? "completed"
+                  : "failed",
+              durationMilliseconds: Date.now() - started,
+            })
+            .info("Webhook-triggered Poll finished");
+        }
         queued.respond(response);
         if (queued.request.command === "stop" && response.ok) {
           stopping = true;
@@ -575,6 +640,59 @@ export async function startDaemon(
         void runWorker();
       }
     }
+  }
+
+  function admitWebhook(
+    repository: string,
+    delivery: string,
+  ): WebhookAdmission {
+    if (stopping) return "stopping";
+    if (!isConfigurationCurrent()) return "configuration-changed";
+    const now = Date.now();
+    for (const [id, acceptedAt] of recentWebhookDeliveries) {
+      if (now - acceptedAt >= webhookDeliveryWindowMilliseconds)
+        recentWebhookDeliveries.delete(id);
+    }
+    if (recentWebhookDeliveries.has(delivery)) return "duplicate";
+    const targets = settings.Applications.filter(
+      (application) =>
+        canonicalGitHubRepository(application.GitRepositoryUrl) === repository,
+    );
+    if (targets.length === 0) return "ignored";
+    const additions = targets.filter(
+      (application) => !pendingWebhookApplications.has(application.Name),
+    );
+    if (queue.length + additions.length > queueCapacity) return "busy";
+    // Reserve every target before starting the worker or remembering acceptance.
+    for (const application of additions) {
+      pendingWebhookApplications.add(application.Name);
+      queue.push({
+        request: { command: "poll", application: application.Name },
+        webhookApplication: application.Name,
+        respond: () => {},
+      });
+    }
+    if (recentWebhookDeliveries.size >= webhookDeliveryLimit) {
+      recentWebhookDeliveries.delete(
+        recentWebhookDeliveries.keys().next().value!,
+      );
+    }
+    recentWebhookDeliveries.set(delivery, now);
+    for (const application of targets) {
+      logger
+        .child({
+          event: "github-webhook-queue",
+          application: application.Name,
+          outcome: additions.includes(application) ? "accepted" : "coalesced",
+          pending: queue.length,
+        })
+        .info("Webhook-triggered Poll queued");
+    }
+    if (!workerRunning) {
+      workerRunning = true;
+      setImmediate(() => void runWorker());
+    }
+    return additions.length === 0 ? "coalesced" : "accepted";
   }
 
   function enqueue(request: DaemonRequest, source: QueueSource): void {
@@ -624,7 +742,12 @@ export async function startDaemon(
    */
   function dispatch(request: DaemonRequest): Promise<DaemonResponse> {
     return new Promise((resolve) => {
-      if (!enqueueClient(request, resolve)) {
+      const parsed = parseRequest(request);
+      if (!parsed) {
+        resolve({ ok: false, reason: "invalid-request" });
+        return;
+      }
+      if (!enqueueClient(parsed, resolve)) {
         resolve({ ok: false, reason: "busy" });
       }
     });
@@ -710,6 +833,55 @@ export async function startDaemon(
     } catch (error) {
       logger.warn("Failed to start the MCP server");
       logError(logger, error);
+    }
+  }
+
+  if (settings.GitHubWebhooks?.Enabled) {
+    const config = settings.GitHubWebhooks;
+    const environmentName =
+      config.Secret === undefined
+        ? undefined
+        : parseHostEnvironmentReference(config.Secret);
+    const secret =
+      environmentName === undefined ? undefined : process.env[environmentName];
+    if (!secret) {
+      logger.warn(
+        "GitHub webhooks unavailable: configure the referenced signing secret in the daemon environment and restart",
+      );
+    } else if (!stopping) {
+      try {
+        const started = await startGitHubWebhookServer({
+          port: config.Port!,
+          secret,
+          logger,
+          admit: admitWebhook,
+        });
+        if (stopping) await started.stop();
+        else {
+          webhookServer = started;
+          hookReconciliation = startHookReconciliation({
+            settings,
+            secret,
+            logger,
+            fetch: options.webhookFetch,
+            available: () =>
+              !stopping &&
+              webhookServer !== undefined &&
+              isConfigurationCurrent(),
+          });
+          logger
+            .child({
+              event: "github-webhook-listener",
+              port: started.port,
+              publicUrl: githubWebhookUrl(config.PublicUrl!),
+            })
+            .info("GitHub webhook listener ready on 127.0.0.1");
+        }
+      } catch {
+        logger.warn(
+          "GitHub webhooks unavailable: could not bind the configured loopback port; check for another listener and restart",
+        );
+      }
     }
   }
 

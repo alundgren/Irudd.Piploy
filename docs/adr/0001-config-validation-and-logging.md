@@ -102,3 +102,11 @@ Opt-in Buildx progress uses timestamped info-level lines so operators can see
 Dockerfile execution and cache reuse with the normal installed logger. Legacy
 Dockerode progress retains its debug level. Build summaries include total
 duration and follow verification of the expected image in the Engine store.
+
+The optional `GitHubWebhooks` object defaults to disabled. When enabled it
+requires a loopback `Port`, HTTPS-origin `PublicUrl`, and exact host-environment
+`Secret` reference. Only the reference is persisted. The daemon resolves the
+signing secret during listener startup; configuration or secret changes require
+a restart. Missing runtime secrets or a failed bind disable this listener while
+ordinary commands and scheduled Polls continue. See
+[the receiver decision](0010-github-webhook-receiver.md).

@@ -451,6 +451,93 @@ describe("commands", () => {
     },
   );
 
+  it.each([true, false])(
+    "preserves the selected name and failure exit status, daemon=%s",
+    async (reachable) => {
+      const deps = createDeps();
+      const applications = [
+        {
+          application: "app",
+          ok: false as const,
+          stage: "build" as const,
+          message: "build failed",
+        },
+      ];
+      deps.requestDaemon = vi.fn(async () =>
+        reachable
+          ? {
+              ok: true as const,
+              applications,
+              configuration: "current" as const,
+            }
+          : undefined,
+      );
+      deps.pollInline = vi.fn(async () => ({
+        ok: true as const,
+        applications,
+      }));
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      await poll(deps, "app");
+      expect(deps.requestDaemon).toHaveBeenCalledExactlyOnceWith({
+        command: "poll",
+        application: "app",
+      });
+      if (reachable) expect(deps.pollInline).not.toHaveBeenCalled();
+      else expect(deps.pollInline).toHaveBeenCalledExactlyOnceWith("app");
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
+  it("rejects invalid names before requesting work", async () => {
+    const deps = createDeps();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await poll(deps, "");
+    expect(deps.requestDaemon).not.toHaveBeenCalled();
+    expect(deps.pollInline).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("validates inline selections against configured names before Poll work", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "piploy-command-"));
+    const configPath = path.join(directory, "piploy.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        Piploy: {
+          RootDirectory: path.join(directory, "root"),
+          Applications: [application],
+        },
+      }),
+    );
+    const reconcile = vi.fn(async () => [
+      { application: "app", ok: true as const },
+    ]);
+    const deps = createCommandDeps(configPath, () => ({
+      poll: reconcile,
+      getStatus: async () => ({ applications: [] }),
+      getLogs: async () => ({ ok: false, reason: "unknown-application" }),
+      checkGitHubRepositoryAccess: async () => ({
+        accessible: false,
+        reason: "transport-or-fetch-failure",
+      }),
+      attemptSelfUpdate: async () => "up-to-date",
+    }));
+    expect(await deps.pollInline("App")).toMatchObject({
+      ok: false,
+      reason: "unknown-application",
+    });
+    expect(await deps.pollInline("")).toMatchObject({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(await deps.pollInline("app")).toMatchObject({
+      ok: true,
+      applications: [{ application: "app" }],
+    });
+    expect(reconcile).toHaveBeenCalledExactlyOnceWith(undefined, "app");
+  });
+
   it("delegates poll to a reachable daemon", async () => {
     const deps = createDeps();
     const response: DaemonResponse = {
@@ -539,11 +626,11 @@ describe("commands", () => {
     deps.isDaemonListening = vi.fn(async () => true);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await poll(deps);
+    await poll(deps, "app");
 
     expect(deps.pollInline).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
-      "Background service did not respond in time. It may be busy; try 'piploy poll' again shortly.",
+      "Background service did not respond in time. It may be busy; retry the same command shortly.",
     );
     expect(process.exitCode).toBe(1);
   });

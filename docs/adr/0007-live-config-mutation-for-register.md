@@ -37,3 +37,8 @@ requiring an operator to edit a file and restart the service. In exchange, the
 settings object is no longer immutable after startup, so any future code that
 caches a snapshot of `settings.Applications` — rather than reading it per poll —
 would silently miss newly registered Applications.
+
+Webhook admission reads this same live Applications array on each delivery,
+so a newly registered Application can receive a later webhook-triggered Poll.
+The admission step is synchronous and queues work without mutating settings;
+actual targeted Polls still run through the single serial worker.

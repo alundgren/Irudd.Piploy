@@ -8,6 +8,7 @@ export function isRunningLatestVersion(
 ): boolean {
   return (
     commitStatus !== null &&
+    commitStatus.localBranch === commitStatus.remoteBranch &&
     dockerStatus.runningContainerHash !== undefined &&
     commitStatus.remote.hash === dockerStatus.runningContainerHash
   );

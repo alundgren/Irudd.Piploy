@@ -76,3 +76,9 @@ The MCP binding remains unreachable from the public internet, but a wrong
 selection on a CGNAT uplink could expose it to peers on that shared network.
 The explicit startup log makes that failure mode diagnosable. IPv6 Tailscale
 addresses are not supported in v1.
+
+The optional GitHub webhook listener is a separate loopback HTTP server with
+only `POST /public/github-webhook`. It receives signed scheduling hints and
+has no MCP dispatcher or administrative routes. An operator-managed tunnel
+may expose that listener alone; the MCP listener remains private. See
+[the receiver decision](0010-github-webhook-receiver.md).
