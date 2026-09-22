@@ -403,3 +403,12 @@ Omit `application` to Poll all Applications. Names match the complete configured
 `Name`, including case. A selected Poll uses the same daemon queue and current
 configuration checks as a full Poll. The response retains `applications` with
 the selected Application's normal result; failures also set MCP `isError`.
+
+## GitHub push-triggered Polls
+
+Piploy can accept signed GitHub default-branch push notifications on a separate
+loopback listener and promptly queue targeted Polls. This is optional and off
+by default. Follow the [manual webhook guide](docs/agents/github-webhooks.md)
+for configuration, a host-held secret, a tunnel restricted to the receiver,
+verification, limits and disabling. MCP remains private. Scheduled and startup
+Polls continue to recover missed deliveries.

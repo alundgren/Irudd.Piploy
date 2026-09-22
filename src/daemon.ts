@@ -12,6 +12,15 @@ import {
   type GitDiagnostic,
   type GitHubRepositoryAccessResult,
 } from "./git.js";
+import {
+  canonicalGitHubRepository,
+  githubWebhookUrl,
+  startGitHubWebhookServer,
+  webhookDeliveryLimit,
+  webhookDeliveryWindowMilliseconds,
+  type GitHubWebhookServer,
+  type WebhookAdmission,
+} from "./githubWebhooks.js";
 import type { Logger } from "./logger.js";
 import { mcpPort, startMcpServer, type McpServerHandle } from "./mcp.js";
 import { getTailscaleAddress } from "./mcpTailscale.js";
@@ -27,6 +36,7 @@ import {
   ApplicationNameSchema,
   ConfigurationChangedError,
   readConfigurationRevision,
+  parseHostEnvironmentReference,
   registerApplication,
   RegisterApplicationError,
   resolveConfigPath,
@@ -173,6 +183,7 @@ export interface Daemon {
 }
 
 interface QueuedRequest {
+  webhookApplication?: string;
   request: DaemonRequest;
   respond(response: DaemonResponse): void;
 }
@@ -427,6 +438,9 @@ export async function startDaemon(
   let activePoll: Promise<PollApplicationResult[]> | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let mcpServer: McpServerHandle | undefined;
+  let webhookServer: GitHubWebhookServer | undefined;
+  const pendingWebhookApplications = new Set<string>();
+  const recentWebhookDeliveries = new Map<string, number>();
 
   function isConfigurationCurrent(): boolean {
     return (
@@ -460,6 +474,7 @@ export async function startDaemon(
               });
           }),
       close(server),
+      webhookServer?.stop(),
       // A stuck MCP server must not hold up the shutdown a client just asked
       // for, and must not be what fails it. The socket teardown is the one
       // that decides whether the daemon stopped.
@@ -471,8 +486,7 @@ export async function startDaemon(
   /**
    * Registering writes `piploy.json` and then appends to the very array the
    * orchestrator re-reads on each poll, so the next poll picks the Application
-   * up (ADR-0007). It deliberately does not poll itself: polling is Piploy's
-   * only trigger, and nothing pushes work to it.
+   * up (ADR-0007). Registration does not itself start a Poll.
    */
   function runRegister(rawApplication: unknown): DaemonResponse {
     if (!isConfigurationCurrent()) return configurationChangedResponse();
@@ -573,7 +587,26 @@ export async function startDaemon(
       while (!stopping) {
         const queued = queue.shift();
         if (!queued) return;
+        if (queued.webhookApplication !== undefined) {
+          pendingWebhookApplications.delete(queued.webhookApplication);
+        }
+        const started = Date.now();
         const response = await runRequest(queued.request);
+        if (queued.webhookApplication !== undefined) {
+          logger
+            .child({
+              event: "github-webhook-poll",
+              application: queued.webhookApplication,
+              outcome:
+                response.ok &&
+                "applications" in response &&
+                response.applications.every((result) => result.ok)
+                  ? "completed"
+                  : "failed",
+              durationMilliseconds: Date.now() - started,
+            })
+            .info("Webhook-triggered Poll finished");
+        }
         queued.respond(response);
         if (queued.request.command === "stop" && response.ok) {
           stopping = true;
@@ -594,6 +627,59 @@ export async function startDaemon(
         void runWorker();
       }
     }
+  }
+
+  function admitWebhook(
+    repository: string,
+    delivery: string,
+  ): WebhookAdmission {
+    if (stopping) return "stopping";
+    if (!isConfigurationCurrent()) return "configuration-changed";
+    const now = Date.now();
+    for (const [id, acceptedAt] of recentWebhookDeliveries) {
+      if (now - acceptedAt >= webhookDeliveryWindowMilliseconds)
+        recentWebhookDeliveries.delete(id);
+    }
+    if (recentWebhookDeliveries.has(delivery)) return "duplicate";
+    const targets = settings.Applications.filter(
+      (application) =>
+        canonicalGitHubRepository(application.GitRepositoryUrl) === repository,
+    );
+    if (targets.length === 0) return "ignored";
+    const additions = targets.filter(
+      (application) => !pendingWebhookApplications.has(application.Name),
+    );
+    if (queue.length + additions.length > queueCapacity) return "busy";
+    // Reserve every target before starting the worker or remembering acceptance.
+    for (const application of additions) {
+      pendingWebhookApplications.add(application.Name);
+      queue.push({
+        request: { command: "poll", application: application.Name },
+        webhookApplication: application.Name,
+        respond: () => {},
+      });
+    }
+    if (recentWebhookDeliveries.size >= webhookDeliveryLimit) {
+      recentWebhookDeliveries.delete(
+        recentWebhookDeliveries.keys().next().value!,
+      );
+    }
+    recentWebhookDeliveries.set(delivery, now);
+    for (const application of targets) {
+      logger
+        .child({
+          event: "github-webhook-queue",
+          application: application.Name,
+          outcome: additions.includes(application) ? "accepted" : "coalesced",
+          pending: queue.length,
+        })
+        .info("Webhook-triggered Poll queued");
+    }
+    if (!workerRunning) {
+      workerRunning = true;
+      setImmediate(() => void runWorker());
+    }
+    return additions.length === 0 ? "coalesced" : "accepted";
   }
 
   function enqueue(request: DaemonRequest, source: QueueSource): void {
@@ -734,6 +820,45 @@ export async function startDaemon(
     } catch (error) {
       logger.warn("Failed to start the MCP server");
       logError(logger, error);
+    }
+  }
+
+  if (settings.GitHubWebhooks?.Enabled) {
+    const config = settings.GitHubWebhooks;
+    const environmentName =
+      config.Secret === undefined
+        ? undefined
+        : parseHostEnvironmentReference(config.Secret);
+    const secret =
+      environmentName === undefined ? undefined : process.env[environmentName];
+    if (!secret) {
+      logger.warn(
+        "GitHub webhooks unavailable: configure the referenced signing secret in the daemon environment and restart",
+      );
+    } else if (!stopping) {
+      try {
+        const started = await startGitHubWebhookServer({
+          port: config.Port!,
+          secret,
+          logger,
+          admit: admitWebhook,
+        });
+        if (stopping) await started.stop();
+        else {
+          webhookServer = started;
+          logger
+            .child({
+              event: "github-webhook-listener",
+              port: started.port,
+              publicUrl: githubWebhookUrl(config.PublicUrl!),
+            })
+            .info("GitHub webhook listener ready on 127.0.0.1");
+        }
+      } catch {
+        logger.warn(
+          "GitHub webhooks unavailable: could not bind the configured loopback port; check for another listener and restart",
+        );
+      }
     }
   }
 

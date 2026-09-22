@@ -26,7 +26,10 @@ uses a complete, case-sensitive configured Name. A selected Poll leaves other
 Applications untouched and skips global inactive-resource cleanup; full Polls
 perform that cleanup. Polling is Piploy's only
 trigger for changing declared Application state; Docker may maintain that
-declared container between Polls. Nothing pushes work to Piploy. Each Poll discovers the current default branch
+declared container between Polls. Optional verified GitHub default-branch push
+notifications queue targeted Polls for every matching configured Application.
+These notifications are scheduling hints; startup and scheduled Polls remain
+recovery after missed deliveries or restart. Each Poll discovers the current default branch
 from the configured Git remote and makes the owned checkout match its tip
 before selecting a commit. This includes a default changed since cloning.
 Status reads that same current default without moving the checkout; differing
